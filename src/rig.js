@@ -111,8 +111,8 @@
      * @param {!Object} exporter Either (a) the function that will be executed
      *     to instantiate the module or (b) the object that will be assigned as
      *     the exported value of the module.
-     * @param {Array.<(AmdId|string)>} opt_dependencies A list of valid AMD
-     *     module IDs on which the parital module depends.
+     * @param {Array.<(AmdId|string)>=} opt_dependencies A list of valid AMD
+     *     module IDs on which the partial module depends.
      * @param {AmdId=} opt_id A valid AMD module ID.
      */
     function addPartial(exporter, opt_dependencies, opt_id) {
@@ -378,8 +378,11 @@
    * A placeholder for an incompletely initialized module. When the definition
    * can be completed, call {@code AmdPartial.prototype.finalize}.
    *
-   * @param {!(Function|Object)} exporter
-   * @param {Array.<string>=} opt_dependencies
+   * @param {!Object} exporter Either (a) the function that will be executed
+   *     to instantiate the module or (b) the object that will be assigned as
+   *     the exported value of the module.
+   * @param {Array.<(AmdId|string)>=} opt_dependencies A list of valid AMD
+   *     module IDs on which the partial module depends.
    *
    * @constructor
    */
@@ -393,13 +396,6 @@
     } else {
       this.exports = exporter;
     }
-  }
-
-  /**
-   * @return {AmdId} This module's ID if it has one; {@code undefined} otherwise.
-   */
-  AmdPartial.prototype.getId = function () {
-    return this.id;
   }
 
   /**
@@ -528,9 +524,12 @@
    * Registers the module named by {@code opt_id} and assembled by
    * {@code exporter} so that it can be referenced by other modules.
    *
-   * @param {(string|null|undefined)} opt_id
-   * @param {(Array.<string>|null|undefined)} opt_dependencies
-   * @param {!(Function|Object)} exporter
+   * @param {AmdId=} opt_id A valid AMD module ID.
+   * @param {Array.<(AmdId|string)>} opt_dependencies A list of valid AMD
+   *     module IDs on which the registered module depends.
+   * @param {!Object} exporter Either (a) the function that will be executed
+   *     to instantiate the module or (b) the object that will be assigned as
+   *     the exported value of the module.
    */
   function define(opt_id, opt_dependencies, exporter) {
     if (arguments.length === 1) {
