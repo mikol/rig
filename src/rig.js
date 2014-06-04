@@ -143,7 +143,9 @@
      * @param {Object} module The exported module interface to cache.
      */
     function cacheModule(id, module) {
-      cache[new AmdId(id)] = module;
+      if (id) {
+        cache[new AmdId(id)] = module;
+      }
     }
 
     /**
@@ -514,7 +516,7 @@
       this.exports = exporter.apply(null, this.getModules()) || this.exports;
     }
 
-    this.id && AmdLoader.cacheModule(this.id, this.exports);
+    AmdLoader.cacheModule(this.id, this.exports);
   };
 
   // -------------------------------------------------------------------------
