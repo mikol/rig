@@ -506,7 +506,7 @@
       , exporter = this.exporter
       ;
 
-    if (!this.id && resourceId) {
+    if (resourceId) {
       this.setId(resourceId);
     }
 
