@@ -6,8 +6,8 @@
    * Registers the module named by {@code opt_id} and assembled by
    * {@code exporter} so that it can be referenced by other modules.
    *
-   * @param {AmdId=} opt_id A valid AMD module ID.
-   * @param {Array.<(AmdId|string)>} opt_dependencies A list of valid AMD
+   * @param {string=} opt_id A valid AMD module ID.
+   * @param {Array.<string>=} opt_dependencies A list of valid AMD
    *     module IDs on which the registered module depends.
    * @param {!Object} exporter Either (a) the function that will be executed
    *     to instantiate the module or (b) the object that will be assigned as
@@ -323,7 +323,7 @@
      */
     function cacheModule(id, module) {
       if (id) {
-        cache[new AmdId(id)] = module;
+        cache[id] = module;
       }
     }
 
@@ -603,9 +603,8 @@
 
   /**
    * Adds the specified module ID to this definition and, as a side effect,
-   * immediately exports the module's interface. Note: only the first call
-   * with a defined {@code id} will have any effect; all subsequent calls
-   * will be ignored.
+   * immediately exports the module's interface if it currently has one. Note:
+   * only the first call with a defined {@code id} will set this module's ID.
    *
    * @public
    */
@@ -615,7 +614,9 @@
 
       this.module.id = this.id.toString();
       this.module.uri = this.id.toUri();
+    }
 
+    if (this.exports) {
       AmdLoader.cacheModule(this.id, this.exports);
     }
   };
@@ -713,19 +714,15 @@
    * @public
    */
   AmdPartial.prototype.finalize = function (resourceId) {
-    var module = this.module
-      , exporter = this.exporter
+    var exporter = this.exporter
+      , result = exporter && exporter.apply(null, this.getModules())
       ;
 
-    if (resourceId) {
-      this.setId(resourceId);
+    if (result) {
+      this.exports = result;
     }
 
-    if (exporter) {
-      this.exports = exporter.apply(null, this.getModules()) || this.exports;
-    }
-
-    AmdLoader.cacheModule(this.id, this.exports);
+    this.setId(resourceId);
   };
 
   // -------------------------------------------------------------------------
