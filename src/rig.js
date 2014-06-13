@@ -1,4 +1,35 @@
-(function (global) {
+/**
+ * @license Copyright 2014 Mikol Graves.
+ * Available under a Creative Commons Attribution 4.0 International License.
+ * See http://creativecommons.org/licenses/by/4.0/ for details.
+ */
+
+try {
+  // Running in a local execution context.
+  var RIG_LOCAL_SCOPE = {}
+    , RIG_GLOBAL_SCOPE = global
+    ;
+
+  // Parse out parameters and pair them with their corresponding arguments.
+  RIG_LOCAL_SCOPE['\bp'] = ('' + arguments.callee)
+      .match(/function\s+\S*\s*?\((.*?)\)/)[1].split(/,\s*?/)
+
+  while (RIG_LOCAL_SCOPE['\bp'].length) {
+    if (RIG_LOCAL_SCOPE['\bp'][0]) {
+      RIG_LOCAL_SCOPE[RIG_LOCAL_SCOPE['\bp'].shift().trim()] =
+          arguments[arguments.length - RIG_LOCAL_SCOPE['\bp'].length - 1];
+    } else {
+      RIG_LOCAL_SCOPE['\bp'].shift();
+    }
+  }
+
+  delete RIG_LOCAL_SCOPE['\bp'];
+} catch (e) {
+  // Running in the global execution context.
+  RIG_GLOBAL_SCOPE = this;
+}
+
+(function (global, local) {
   // -------------------------------------------------------------------------
   // Asynchronous Module Definition (AMD) API
 
@@ -124,19 +155,19 @@
    */
   function requireAsync(dependencies, callback) {
     var x = 0
-      , xn = dependencies.length
+      , n = dependencies.length
       , skipped = 0
       ;
 
     function fn() {
-      if (xn === 0) {
+      if (n === 0) {
         callback.apply(null, AmdLoader.getModules(dependencies));
       }
 
-      --xn;
+      --n;
     }
 
-    for (; x < xn; ++x) {
+    for (; x < n; ++x) {
       var id = new AmdId(dependencies[x]);
 
       if (AmdLoader.getModule(id)) {
@@ -147,7 +178,7 @@
       AmdLoader.load(id, fn);
     }
 
-    xn -= skipped;
+    n -= skipped;
 
     fn();
   }
@@ -164,11 +195,12 @@
    *
    * @private
    */
-  function requireSync(dependency) {
+  var requireSync = local.require || function requireSync(dependency) {
     try  {
       var id = new AmdId(dependency);
     } catch (ex) {
-      throw new TypeError('@param dependency must be a valid module ID string.');
+      throw new TypeError('@param dependency must be a valid ' +
+          'module ID string.');
     }
 
     var module = AmdLoader.getModule(id);
@@ -178,7 +210,7 @@
     }
 
     return module;
-  }
+  };
 
   // ---------------------------------------------------------------
   // AMD Module Loader
@@ -187,8 +219,9 @@
   var AmdLoader = {};
 
   (function (exports) {
-    var sibling = document.getElementsByTagName('script')[0]
-      , cache = { require: require, exports: true, module: true }
+    var dom = global.document
+      , sibling = dom && dom.getElementsByTagName('script')[0]
+      , cache = { rig: require, require: require, exports: true, module: true }
       , queue = []
       , queued = {}
       ;
@@ -202,15 +235,20 @@
      *
      * @public
      */
-    function load(id, callback) {
-      var el = document.createElement('script');
-      el.charset = 'utf-8';
-      el.async = true;
-      el.src = id.toUri();
-      el.onload = onLoad.bind(null, el, id, callback);
+    var load = local.require
+      ? function load(id, callback) {
+          cacheModule(id, requireSync(id.toString()));
+          onLoad(id, callback);
+        }
+      : function load(id, callback) {
+          var el = dom.createElement('script');
+          el.charset = 'utf-8';
+          el.async = true;
+          el.src = id.toUri();
+          el.onload = onScriptLoad.bind(null, el, id, callback);
 
-      sibling.parentNode.insertBefore(el, sibling);
-    }
+          sibling.parentNode.insertBefore(el, sibling);
+        };
 
     /**
      * Builds a list of dependencies for any queued partially defined modules.
@@ -222,11 +260,11 @@
      */
     function getDependencies(opt_relativeTo) {
       var x = 0
-        , xn = queue.length
+        , n = queue.length
         , result = []
         ;
 
-      for (; x < xn; ++x) {
+      for (; x < n; ++x) {
         var dependencies = queue[x].getDependencies();
         for (var j = 0, jn = dependencies.length; j < jn; ++j) {
           // This has the (desireable and necessary) side effect of relitivizing
@@ -243,23 +281,22 @@
     }
 
     /**
-     * Handles load events for scripts dynamically inserted into the DOM.
+     * Continues composing a module after it has been loaded.
      *
-     * @param {!Element} el A reference to the script tag.
-     * @param {!AmdId} id The ID of the module loaded by {@code el}.
+     * @param {!AmdId} id The ID of the module loaded.
      * @param {!Function} callback The function that will be executed once all
      *     of the queued partial module definitions have been finalized.
      *
      * @private
      */
-    function onLoad(el, id, callback) {
+    function onLoad(id, callback) {
       var partials = queue.slice()
         , dependencies = getDependencies(id.getDirname())
         ;
 
       queue = [];
 
-      require(dependencies, function () {
+      requireAsync(dependencies, function () {
         while (partials.length > 0) {
           var partial = partials.shift()
             , exporter = partial.exporter
@@ -275,6 +312,20 @@
 
         callback();
       });
+    }
+
+    /**
+     * Handles load events for scripts dynamically inserted into the DOM.
+     *
+     * @param {!Element} el A reference to the script tag.
+     * @param {!AmdId} id The ID of the module loaded by {@code el}.
+     * @param {!Function} callback The function that will be executed once all
+     *     of the queued partial module definitions have been finalized.
+     *
+     * @private
+     */
+    function onScriptLoad(el, id, callback) {
+      onLoad(id, callback);
 
       el.parentNode.removeChild(el);
       delete el.onload;
@@ -349,10 +400,10 @@
     function getModules(dependencies) {
       var list = []
         , x = 0
-        , xn = dependencies.length
+        , n = dependencies.length
         ;
 
-      for (; x < xn; ++x) {
+      for (; x < n; ++x) {
         list.push(getModule(dependencies[x]));
       }
 
@@ -380,23 +431,24 @@
    */
   function AmdId(value, opt_relativeTo) {
     if (!AmdId.isValid(value)) {
-      throw new TypeError('@param value must be a valid, useable '
-        + 'AMD module ID string.');
+      throw new TypeError('@param value must be a valid, useable ' +
+          'AMD module ID string.');
     }
 
-    if (opt_relativeTo) {
+    if (value.indexOf('.') === 0 && opt_relativeTo) {
       try {
         if ((opt_relativeTo = new AmdId(opt_relativeTo)).isRelative()) {
           throw 0;
         }
       } catch (ex) {
-        throw new TypeError('@param value must be a valid, useable top-level '
-          + 'AMD module ID string.');
+        throw new TypeError('@param opt_relativeTo must be a valid, useable ' +
+            'top-level AMD module ID string.');
       }
+
+      this.relativeTo = opt_relativeTo;
     }
 
     this.value = value;
-    this.relativeTo = opt_relativeTo;
   }
 
   subjoin(AmdId, String);
@@ -543,14 +595,14 @@
             : this.value.split('/')
         , part
         , x = 0
-        , xn = parts.length
+        , n = parts.length
         // Retain a leading slash if there is one.
         , terms = parts[x] === '' ? [''] : []
         ;
 
-      for (; x < xn; ++x) {
+      for (; x < n; ++x) {
         part = parts[x]
-        if (part === '.' || part === '') {
+        if (x > 0 && (part === '.' || part === '')) {
           continue;
         } else if (part === '..') {
           terms.pop();
@@ -644,7 +696,7 @@
           deps = [];
 
           if (this.exporter) {
-            for (var x = 0, xn = Math.max(3, this.exporter.length); x < xn; x++) {
+            for (var x = 0, n = Math.max(3, this.exporter.length); x < n; x++) {
               deps.push(cjsDependencies[x]);
             }
           }
@@ -677,11 +729,11 @@
   AmdPartial.prototype.getModules = function () {
     var dependencies = this.getDependencies()
       , x = 0
-      , xn = dependencies.length
-      , modules = new Array(xn)
+      , n = dependencies.length
+      , modules = new Array(n)
       ;
 
-    for (; x < xn; ++x) {
+    for (; x < n; ++x) {
       var id = new AmdId(dependencies[x]);
 
       switch (id.toString()) {
@@ -830,6 +882,11 @@
   // -------------------------------------------------------------------------
   // Exports
 
-  global['define'] = define;
-  global['require'] = require;
-})(this);
+  global.define = define;
+
+  if (local.module) {
+    local.module.exports = require;
+  } else {
+    global.require = require;
+  }
+})(RIG_GLOBAL_SCOPE, RIG_LOCAL_SCOPE);
