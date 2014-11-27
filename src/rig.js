@@ -221,7 +221,7 @@ try {
   var AmdLoader = {};
 
   (function (exports) {
-    var dom = gspace.document
+    var dom = gspace.documen
       , sibling = dom && dom.getElementsByTagName('script')[0]
       , cache = { rig: require, require: require, exports: true, module: true }
       , queue = []
@@ -602,7 +602,7 @@ try {
       var parts = (this.isRelative() && this.relativeTo)
             ? this.relativeTo.slice().concat(this.value.split('/'))
             : this.value.split('/')
-        , part
+        , par
         , x = 0
         , n = parts.length
         // Retains a leading / or ./ if there is one.
@@ -821,7 +821,7 @@ try {
   }
 
   /**
-   * Determines if reference {@code value} is a non-primitive, non-null object
+   * Determines if reference {@code value} is a non-primitive, non-null objec
    * type; not {@code boolean}, {@code number}, {@code string}, {@code null},
    * or {@code undefined}, but any other data type that can be extended
    * dynamically with properties and methods such as the primitive wrappers
@@ -856,7 +856,7 @@ try {
   }
 
   /**
-   * Appends {@code subtype} to {@code opt_supertype}'s prototype chain so that
+   * Appends {@code subtype} to {@code opt_supertype}'s prototype chain so tha
    * {@code subtype} inherits all of the methods and properties defined by its
    * ancestor types in the chain, including the core {@code Object} prototype;
    * furthermore, {@code opt_supertype} will be made accessible via the
