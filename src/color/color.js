@@ -37,7 +37,7 @@ define(['./subjoin'], function (subjoin) {
     // Adjustment added to each channel in point to match lightness.
     var m = lightness - (c / 2);
     // A point on an RGB cube that matches the hue and chroma of our color.
-    var point = 
+    var point =
       [ [c, x, 0]
       , [x, c, 0]
       , [0, c, x]
@@ -53,7 +53,7 @@ define(['./subjoin'], function (subjoin) {
       Math.round((point[2] + m) * 255)
     ];
   }
-  
+
   function hsvToRgb(hsv) {
     // Adapted from (http://en.wikipedia.org/wiki/HSL_and_HSV#From_HSV).
     var hue = ((hsv[0] % 360) / 360) * 360
@@ -70,7 +70,7 @@ define(['./subjoin'], function (subjoin) {
     // The index of hue when 360 degrees is divided into six parts.
     var i = Math.floor((hue / 60) % 6);
     // A point on an RGB cube that matches the hue and chroma of our color.
-    var point = 
+    var point =
       [ [c, x, 0]
       , [x, c, 0]
       , [0, c, x]
@@ -92,23 +92,23 @@ define(['./subjoin'], function (subjoin) {
 
   /** TODO: Document. */
   function Color() {}
-  
+
   var T = subjoin(Color);
   var P = T.prototype;
 
   // --------------------------------------------------------------------------
   // Type Methods
-    
+
   // ----------------------------------------------------------------
   // Core Initialization Methods
-  
+
   T.fromHsl = function (hsl, opt_alpha) {
     var rgb = hslToRgb(hsl);
     var alpha = arguments.length === 4 ? opt_alpha : 1;
     var color = T.fromRgb(rgb, alpha);
 
     color.hsla = hsl.concat(alpha);
-    
+
     return color;
   };
 
@@ -117,7 +117,7 @@ define(['./subjoin'], function (subjoin) {
     var color = T.fromRgb(rgb, hsla[3]);
 
     color.hsla = hsla;
-    
+
     return color;
   };
 
@@ -127,7 +127,7 @@ define(['./subjoin'], function (subjoin) {
     var color = T.fromRgb(rgb, alpha);
 
     color.hsva = hsv.concat(alpha);
-    
+
     return color;
   };
 
@@ -135,7 +135,7 @@ define(['./subjoin'], function (subjoin) {
     var rgb = hsvToRgb(hsva);
     var color = T.fromRgb(rgb, hsva[3]);
 
-    color.hsva = hsva;    
+    color.hsva = hsva;
 
     return color;
   };
@@ -143,7 +143,7 @@ define(['./subjoin'], function (subjoin) {
   T.fromRgb = function (rgb, opt_alpha) {
     var alpha = arguments.length === 4 ? opt_alpha : 1;
     var color = new Color();
-    
+
     color.rgba = rgb.concat(alpha);
 
     return color;
@@ -151,7 +151,7 @@ define(['./subjoin'], function (subjoin) {
 
   T.fromRgba = function (rgba) {
     var color = new Color();
-    
+
     color.rgba = rgba;
 
     return color;
@@ -162,7 +162,7 @@ define(['./subjoin'], function (subjoin) {
 
   T.fromHexString = function (hexString) {
     var rgba;
-    
+
     if (hexString.indexOf('#') === 0) {
       // #RRGGBBAA or #RRGGBB or #RGBA or #RGB
       hexString = hexString.slice(1);
@@ -179,33 +179,33 @@ define(['./subjoin'], function (subjoin) {
         return parseInt(single + single, 16);
       });
     }
-    
+
     if (rgba.length === 4) {
-      return T.fromRgba([rgba[0], rgba[1], rgba[2], rgba[3] / 255]);      
+      return T.fromRgba([rgba[0], rgba[1], rgba[2], rgba[3] / 255]);
     } else if (rgba.length === 3) {
       return T.fromRgb([rgba[0], rgba[1], rgba[2]]);
     }
-    
+
     throw '"' + hexString + '" is not a valid hexidecimal color string.';
   };
 
   T.fromRgbString = function (rgbString) {
     var rgb = rgbString.match(RGB_RE);
-    
+
     if (rgb === null) {
       throw '"' + rgbString + '" is not a valid RGB color string.';
     }
-    
+
     return new T.fromRgb(Number(rgb[1]), Number(rgb[2]), Number(rgb[3]));
   };
 
   T.fromRgbaString = function (rgbaString) {
     var rgba = rgbaString.match(RGBA_RE);
-    
+
     if (rgba === null) {
       throw '"' + rgbaString + '" is not a valid RGBA color string.';
     }
-    
+
     return new T.fromRgba(Number(rgba[1]), Number(rgba[2]), Number(rgba[3]),
         Number(rgba[4]));
   };
@@ -243,15 +243,15 @@ define(['./subjoin'], function (subjoin) {
         } else {
           saturation = delta / (max + min);
         }
-      
+
         if (max === red) {
-          hue = (green - blue) / delta + (green < blue ? 6 : 0);        
+          hue = (green - blue) / delta + (green < blue ? 6 : 0);
         } else if (max === green) {
           hue = (blue - red) / delta + 2;
         } else {
           hue = (red - green) / delta + 4;
         }
-      
+
         hue = hue / 6;
       }
 
@@ -265,7 +265,7 @@ define(['./subjoin'], function (subjoin) {
 
     return this.hsla.slice(0);
   };
-  
+
   P.toHsva = function () {
     // Adapted from Michal Jackson's "RGB to HSL and RGB to HSV Color Model
     // Conversion Algorithms in JavaScript" (http://goo.gl/vULDmg).
@@ -291,16 +291,16 @@ define(['./subjoin'], function (subjoin) {
           hue = 0;
       } else {
         if (max === red) {
-          hue = (green - blue) / delta + (green < blue ? 6 : 0);        
+          hue = (green - blue) / delta + (green < blue ? 6 : 0);
         } else if (max === green) {
           hue = (blue - red) / delta + 2;
         } else {
           hue = (red - green) / delta + 4;
         }
-    
+
         hue = hue / 6;
       }
-      
+
       this.hsva = [
         Math.round(hue * 360),
         saturation,
@@ -308,42 +308,42 @@ define(['./subjoin'], function (subjoin) {
         this.rgba[3]
       ];
     }
-    
+
     return this.hsva.slice(0);
   };
-  
+
   P.toRgba = function () {
     return this.rgba;
   };
-  
+
   P.desaturate = function (delta) {
     var hsla = this.toHsla()
       , saturation = hsla[1] - delta;
       ;
 
     hsla[1] = clamp(saturation);
-        
+
     return T.fromHsla(hsla);
   };
-  
+
   P.spin = function (delta) {
     var hsla = this.toHsla()
       , hue = (hsla[0] + delta) % 360
       ;
-    
+
     hsla[0] = hue > 0 ? hue : 360 + hue;
-    
+
     return T.fromHsla(hsla);
   };
 
   P.toHexString = function () {
     var hexString = decimalToHex(this.rgba[0])
-        + decimalToHex(this.rgba[1]) 
+        + decimalToHex(this.rgba[1])
         + decimalToHex(this.rgba[2])
         + (this.rgba[3] < 1 ? decimalToHex(Math.round(this.rgba[3] * 255)) : '')
       , a = hexString.split('')
       ;
-    
+
     if (a[0] === a[1] && a[2] === a[3] && a[4] === a[5]) {
       if (a.length === 6) {
         hexString = a[0] + a[2] + a[4];
@@ -351,13 +351,13 @@ define(['./subjoin'], function (subjoin) {
         hexString = a[0] + a[2] + a[4] + a[6];
       }
     }
-    
+
     return '#' + hexString;
   };
 
   P.toString = function () {
     return 'rgba(' + this.rgba().join(',') + ')';
   };
-  
+
   return T;
 });
