@@ -26,7 +26,10 @@ try {
 }
 
 (function (ctx) {
-  var gspace = ctx['rig\bgspace'];
+  var gspace = ctx['rig\bgspace']
+    , baseUrl
+    , paths
+    ;
 
   if (!gspace) {
     gspace = ctx;
@@ -124,6 +127,11 @@ try {
       return requireSync(dependency);
     }
   }
+
+  require.config = function (object) {
+    baseUrl = object.baseUrl;
+    paths = object.paths;
+  };
 
   /**
    * Converts a string including a module ID and an extension to a URL path.
@@ -239,7 +247,7 @@ try {
      */
     var load = ctx.require
       ? function load(id, callback) {
-          var fqid = id.isRelative ? new AmdId(id, process.cwd()) : id;
+          var fqid = id.isRelative() ? new AmdId(id, process.cwd()) : id;
 
           process.nextTick(function () {
             cacheModule(id, requireSync(fqid.toString()));
@@ -269,7 +277,7 @@ try {
     function getDependencies(id) {
       var x = 0
         , n = queue.length
-        , relativeTo = id.isRelative() ? void(0) : id.getDirname()
+        , relativeTo = id.isRelative() ? void(0) : id.getModname()
         , result = []
         ;
 
@@ -492,17 +500,37 @@ try {
    * @public
    */
   AmdId.prototype.isRelative = function () {
-    return this.value.indexOf('.') === 0;
+    return this.terms
+      ? this.terms[0].indexOf('.') === 0
+      : this.value.indexOf('.') === 0
+      ;
   };
 
   /**
-   * @return {string} The directory portion of this AMD module ID (for example,
-   *     {@code '/foo/bar/baz/asdf'} in {@code '/foo/bar/baz/asdf/quux'}).
+   * @return {string} The directory portion of this AMD module ID independent
+   *     of its URI (for example, {@code '/foo/baz/asdf'} in
+   *     {@code '/foo/bar/asdf/quux'}); {@code getModname()} and
+   *     {@code getDirname()} will be equal unless the path to the module has
+   *     been interpolated with {@code require.confg()}.
+   *
+   * @public
+   */
+  AmdId.prototype.getModname = function () {
+    if (this.modname === void(0)) {
+      this.modname = this.getDirname();
+    }
+
+    return this.modname;
+  };
+
+  /**
+   * @return {string} The directory portion of this AMD module ID's URI (for
+   *     example, {@code '/foo/bar/asdf'} in {@code '/foo/bar/asdf/quux'}).
    *
    * @public
    */
   AmdId.prototype.getDirname = function () {
-    if (!this.dirname) {
+    if (this.dirname === void(0)) {
       this.dirname = this.slice(0, -1).join('/');
     }
 
@@ -513,10 +541,10 @@ try {
    * @return {string} The last portion of this AMD module ID (for example,
    *     {@code 'quux'} in {@code '/foo/bar/baz/asdf/quux'}).
    *
-   * @private
+   * @public
    */
   AmdId.prototype.getBasename = function () {
-    if (!this.basename) {
+    if (this.basename === void(0)) {
       this.basename = this.slice(-1)[0];
     }
 
@@ -527,10 +555,10 @@ try {
    * @return {string} The filename extension of this ID if it has one;
    *     {@code ''} otherwise.
    *
-   * @private
+   * @public
    */
   AmdId.prototype.getExtension = function () {
-    if (!this.extension) {
+    if (this.extension === void(0)) {
       var basename = this.getBasename()
         , index = basename.lastIndexOf('.')
         ;
@@ -545,7 +573,7 @@ try {
    * @return {string} {@code true} If this AMD module ID ends with a filename
    *     extension such as {@code '.js'}; {@code false} otherwise.
    *
-   * @private
+   * @public
    */
   AmdId.prototype.hasExtension = function () {
     return !!this.getExtension();
@@ -588,6 +616,33 @@ try {
     return this.uri;
   };
 
+  function normalize(parts) {
+    var normalized = []
+      , partZero = parts[0] === '..' || parts[0] === '.' || parts[0] === ''
+          ? parts[0]
+          : null
+      ;
+
+    for (var x = 0, n = parts.length; x < n; ++x) {
+      var part = parts[x];
+
+      if (part === '.' || part === '') {
+        continue;
+      } else if (part === '..') {
+        normalized.pop();
+      } else {
+        normalized.push(part);
+      }
+    }
+
+    // Retain a leading / or ./ or ../ if there is one.
+    if (partZero !== null) {
+      normalized.unshift(partZero);
+    }
+
+    return normalized;
+  }
+
   /**
    * Cleans up this AMD module ID by replacing redundant forward slash
    * delimiters, removing current directory ({@code '.'}) terms, and removing
@@ -599,29 +654,43 @@ try {
    */
   AmdId.prototype.normalize = function () {
     if (!this.normalized) {
-      var parts = (this.isRelative() && this.relativeTo)
-            ? this.relativeTo.slice().concat(this.value.split('/'))
-            : this.value.split('/')
-        , part
-        , x = 0
-        , n = parts.length
-        // Retains a leading / or ./ if there is one.
-        , terms = parts[0] === '.' || parts[0] === '' ? [parts[0]] : []
+      var value = this.value
+        , parts = value.split('/')
         ;
 
-      for (; x < n; ++x) {
-        part = parts[x]
-        if (part === '.' || part === '') {
-          continue;
-        } else if (part === '..') {
-          terms.pop();
-        } else {
-          terms.push(part);
+      if (paths) {
+        var pathsBySpecificity = Object.keys(paths).sort().reverse();
+
+        for (var k = 0, kn = pathsBySpecificity.length; k < kn; ++k) {
+          var path = pathsBySpecificity[k];
+          if (value.indexOf(path) === 0) {
+            var split = paths[path].split('/');
+
+            // This is equivalent to dirname had the path not been
+            // interpolated.
+            this.modname = normalize(parts).slice(0, -1).join('/');
+
+            if (value.length > path.length) {
+              parts = split.concat(value.substr(path.length).split('/'));
+            } else {
+              parts = split;
+            }
+
+            break;
+          }
         }
       }
 
-      this.terms = terms;
-      this.normalized = terms.join('/');
+      if (this.isRelative() && this.relativeTo !== void(0)) {
+        parts = this.relativeTo.slice().concat(parts);
+      }
+
+      if (baseUrl) {
+        parts = baseUrl.split('/').concat(parts);
+      }
+
+      this.terms = normalize(parts);
+      this.normalized = this.terms.join('/');
     }
 
     return this.normalized;
