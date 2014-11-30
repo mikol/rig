@@ -277,7 +277,10 @@ try {
     function getDependencies(id) {
       var x = 0
         , n = queue.length
-        , relativeTo = id.isRelative() ? void(0) : id.getModname()
+        , fqid = ctx.require && id.isRelative()
+            ? new AmdId(id, process.cwd())
+            : id
+        , relativeTo = fqid.getModname()
         , result = []
         ;
 
