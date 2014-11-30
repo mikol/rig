@@ -624,6 +624,19 @@ try {
     return this.uri;
   };
 
+  /**
+   * Cleans up an array of path components by removing empty terms, current
+   * directory ({@code '.'}) terms, and parent directory ({@code '..'}) terms
+   * along with their corresponding directory names (for example, {@code
+   * ['foo','bar','','baz','.','asdf', 'quux','..']} becomes {@code
+   * ['foo','bar','baz','asdf']}).
+   *
+   * @param {!Array.<string>} parts The path components to clean cup.
+   *
+   * @return {!Array.<string>} The normalized path components.
+   *
+   * @private
+   */
   function normalize(parts) {
     var normalized = []
       , partZero = parts[0] === '..' || parts[0] === '.' || parts[0] === ''
