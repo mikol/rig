@@ -5,7 +5,7 @@
  */
 
 try {
-  // Running in a local execution context.
+  // Running in a local (command line) execution context.
   // Parse out parameters and pair them with their corresponding arguments.
   (function (ctx, a, c) {
     var parameters = /function[^(]*?\((.*?)\)/.exec(c)[1].split(/,\s*?/)
@@ -27,11 +27,13 @@ try {
 
 (function (ctx) {
   var gspace = ctx['rig\bgspace']
+    , isCommandLine = true
     , baseUrl
     , paths
     ;
 
   if (!gspace) {
+    isCommandLine = false;
     gspace = ctx;
     ctx = {};
   }
@@ -205,22 +207,25 @@ try {
    *
    * @private
    */
-  var requireSync = ctx.require || function requireSync(dependency) {
-    try  {
-      var id = new AmdId(dependency);
-    } catch (ex) {
-      throw new TypeError('@param dependency must be a valid ' +
-          'module ID string.');
-    }
+  var requireSync = isCommandLine
+    ? ctx.require
+    : function requireSync(dependency) {
+        try  {
+          var id = new AmdId(dependency);
+        } catch (ex) {
+          throw new TypeError('@param dependency must be a valid ' +
+              'module ID string.');
+        }
 
-    var module = AmdLoader.getModule(id);
+        var module = AmdLoader.getModule(id);
 
-    if (!module) {
-      throw new ReferenceError('Module "' + dependency + '" is not defined.');
-    }
+        if (!module) {
+          throw new ReferenceError('Module "' + dependency +
+              '" is not defined.');
+        }
 
-    return module;
-  };
+        return module;
+      };
 
   // ---------------------------------------------------------------
   // AMD Module Loader
@@ -245,7 +250,7 @@ try {
      *
      * @public
      */
-    var load = ctx.require
+    var load = isCommandLine
       ? function load(id, callback) {
           var fqid = id.isRelative() ? new AmdId(id, process.cwd()) : id;
 
@@ -277,7 +282,7 @@ try {
     function getDependencies(id) {
       var x = 0
         , n = queue.length
-        , fqid = ctx.require && id.isRelative()
+        , fqid = isCommandLine && id.isRelative()
             ? new AmdId(id, process.cwd())
             : id
         , relativeTo = fqid.getModname()
