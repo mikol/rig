@@ -90,7 +90,6 @@ define(['./subjoin'], function (subjoin) {
   // --------------------------------------------------------------------------
   // Type Definition
 
-  /** TODO: Document. */
   function Color() {}
 
   var T = subjoin(Color);
@@ -104,8 +103,8 @@ define(['./subjoin'], function (subjoin) {
 
   T.fromHsl = function (hsl, opt_alpha) {
     var rgb = hslToRgb(hsl);
-    var alpha = arguments.length === 4 ? opt_alpha : 1;
-    var color = T.fromRgb(rgb, alpha);
+    var alpha = arguments.length === 2 ? opt_alpha : 1;
+    var color = T.fromRgba(rgb.concat(alpha));
 
     color.hsla = hsl.concat(alpha);
 
@@ -114,7 +113,7 @@ define(['./subjoin'], function (subjoin) {
 
   T.fromHsla = function (hsla) {
     var rgb = hslToRgb(hsla);
-    var color = T.fromRgb(rgb, hsla[3]);
+    var color = T.fromRgba(rgb.concat(hsla[3]));
 
     color.hsla = hsla;
 
@@ -123,8 +122,8 @@ define(['./subjoin'], function (subjoin) {
 
   T.fromHsv = function (hsv, opt_alpha) {
     var rgb = hsvToRgb(hsv);
-    var alpha = arguments.length === 4 ? opt_alpha : 1;
-    var color = T.fromRgb(rgb, alpha);
+    var alpha = arguments.length === 2 ? opt_alpha : 1;
+    var color = T.fromRgba(rgb.concat(alpha));
 
     color.hsva = hsv.concat(alpha);
 
@@ -133,7 +132,7 @@ define(['./subjoin'], function (subjoin) {
 
   T.fromHsva = function (hsva) {
     var rgb = hsvToRgb(hsva);
-    var color = T.fromRgb(rgb, hsva[3]);
+    var color = T.fromRgb(rgb.concat(hsva[3]));
 
     color.hsva = hsva;
 
@@ -141,7 +140,7 @@ define(['./subjoin'], function (subjoin) {
   };
 
   T.fromRgb = function (rgb, opt_alpha) {
-    var alpha = arguments.length === 4 ? opt_alpha : 1;
+    var alpha = arguments.length === 2 ? opt_alpha : 1;
     var color = new Color();
 
     color.rgba = rgb.concat(alpha);
@@ -181,9 +180,10 @@ define(['./subjoin'], function (subjoin) {
     }
 
     if (rgba.length === 4) {
-      return T.fromRgba([rgba[0], rgba[1], rgba[2], rgba[3] / 255]);
+      rgba[3] = rgba[3] / 255;
+      return T.fromRgba(rgba);
     } else if (rgba.length === 3) {
-      return T.fromRgb([rgba[0], rgba[1], rgba[2]]);
+      return T.fromRgba(rgba.concat(1));
     }
 
     throw '"' + hexString + '" is not a valid hexidecimal color string.';
@@ -196,7 +196,7 @@ define(['./subjoin'], function (subjoin) {
       throw '"' + rgbString + '" is not a valid RGB color string.';
     }
 
-    return new T.fromRgb(Number(rgb[1]), Number(rgb[2]), Number(rgb[3]));
+    return new T.fromRgba([Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), 1]);
   };
 
   T.fromRgbaString = function (rgbaString) {
@@ -206,8 +206,8 @@ define(['./subjoin'], function (subjoin) {
       throw '"' + rgbaString + '" is not a valid RGBA color string.';
     }
 
-    return new T.fromRgba(Number(rgba[1]), Number(rgba[2]), Number(rgba[3]),
-        Number(rgba[4]));
+    return new T.fromRgba([Number(rgba[1]), Number(rgba[2]), Number(rgba[3]),
+        Number(rgba[4])]);
   };
 
   // --------------------------------------------------------------------------
@@ -316,9 +316,19 @@ define(['./subjoin'], function (subjoin) {
     return this.rgba;
   };
 
-  P.desaturate = function (delta) {
+  P.adjustHslHue = function (adjustment) {
     var hsla = this.toHsla()
-      , saturation = hsla[1] - delta;
+      , hue = (hsla[0] + adjustment) % 360
+      ;
+
+    hsla[0] = hue > 0 ? hue : 360 + hue;
+
+    return T.fromHsla(hsla);
+  };
+
+  P.adjustHslSaturation = function (adjustment) {
+    var hsla = this.toHsla()
+      , saturation = hsla[1] + adjustment;
       ;
 
     hsla[1] = clamp(saturation);
@@ -326,12 +336,12 @@ define(['./subjoin'], function (subjoin) {
     return T.fromHsla(hsla);
   };
 
-  P.spin = function (delta) {
+  P.adjustHslLightness = function (adjustment) {
     var hsla = this.toHsla()
-      , hue = (hsla[0] + delta) % 360
+      , lightness = hsla[2] + adjustment;
       ;
 
-    hsla[0] = hue > 0 ? hue : 360 + hue;
+    hsla[2] = clamp(lightness);
 
     return T.fromHsla(hsla);
   };
@@ -356,7 +366,7 @@ define(['./subjoin'], function (subjoin) {
   };
 
   P.toString = function () {
-    return 'rgba(' + this.rgba().join(',') + ')';
+    return 'rgba(' + this.rgba.join(',') + ')';
   };
 
   return T;
