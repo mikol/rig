@@ -56,7 +56,7 @@ define(['./subjoin'], function (subjoin) {
 
   function hsvToRgb(hsv) {
     // Adapted from (http://en.wikipedia.org/wiki/HSL_and_HSV#From_HSV).
-    var hue = ((hsv[0] % 360) / 360) * 360
+    var hue = hsv[0] % 360
       , saturation = hsv[1]
       , value = hsv[2]
       ;
