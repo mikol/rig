@@ -31,12 +31,12 @@ define(['./subjoin'], function (subjoin) {
     // Chroma.
     var c = (1 - Math.abs(2 * lightness - 1)) * saturation;
     // The index of hue when 360 degrees is divided into six parts.
-    var i = Math.floor((hue / 60) % 6);
-    // The second largest component of the color.
     var x = c * (1 - Math.abs((hue / 60) % 2 - 1));
     // Adjustment added to each channel in point to match lightness.
     var m = lightness - (c / 2);
     // A point on an RGB cube that matches the hue and chroma of our color.
+    var i = Math.floor((hue / 60) % 6);
+    // The second largest component of the color.
     var point =
       [ [c, x, 0]
       , [x, c, 0]
