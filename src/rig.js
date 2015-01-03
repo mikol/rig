@@ -354,7 +354,7 @@
    *
    * @return {!boolean} `true` if `v` is an array; `false` otherwise.
    *
-   * @public
+   * @private
    */
   function isArray(v) {
     return v && O_TO_STRING.call(v) === '[object Array]';
@@ -367,7 +367,7 @@
    *
    * @return {!boolean} `true` if `v` is a function; `false` otherwise.
    *
-   * @public
+   * @private
    */
   function isFunction(v) {
     return v && typeof v === 'function';
@@ -382,9 +382,9 @@
    *
    * @param {*} v The reference to test.
    *
-   * @return {!boolean} `true` if `v` is a string; `false` otherwise.
+   * @return {!boolean} `true` if `v` is an object; `false` otherwise.
    *
-   * @public
+   * @private
    */
   function isObject(v) {
     return v && typeof v === 'object' || typeof v === 'function';
@@ -397,7 +397,7 @@
    *
    * @return {!boolean} `true` if `v` is a string; `false` otherwise.
    *
-   * @public
+   * @private
    */
   function isString(v) {
     return typeof v === 'string' || O_TO_STRING.call(v) === '[object String]';
