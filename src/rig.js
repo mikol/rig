@@ -4,988 +4,873 @@
  * See http://creativecommons.org/licenses/by/4.0/ for details.
  */
 
-try {
-  // Running in a local (command line) execution context.
-  // Parse out parameters and pair them with their corresponding arguments.
-  (function (ctx, a, c) {
-    var parameters = /function[^(]*?\((.*?)\)/.exec(c)[1].split(/,\s*?/)
-      , arguments = Array.prototype.slice.call(a)
-      ;
-
-    ctx['rig\bgspace'] = global;
-    while (parameters.length) {
-      if (parameters[0]) {
-        ctx[parameters.shift().trim()] = arguments.shift();
-      } else {
-        parameters.shift();
-      }
-    }
-  })(this, arguments, arguments.callee);
-} catch (e) {
-  ;
-}
-
-(function (ctx) {
-  var gspace = ctx['rig\bgspace']
-    , isCommandLine = true
-    , baseUrl
-    , paths
-    ;
-
-  if (!gspace) {
-    isCommandLine = false;
-    gspace = ctx;
-    ctx = {};
-  }
-
-  // -------------------------------------------------------------------------
-  // Asynchronous Module Definition (AMD) API
+(function (global, dom, TypeError, undefined) {
+  // --------------------------------------------------------------------------
+  // Local Constants
 
   /**
-   * Registers the module named by {@code opt_id} and assembled by
-   * {@code exporter} so that it can be referenced by other modules.
+   * Matches absolute URLs.
+   *
+   * @type {RegExp}
+   * @private
+   */
+  var ABSOLUTE_PATH_RE = /^(\/\/?|https?:\/\/|file:\/\/\/)(.*)/;
+
+  /**
+   * A shorcut for calling the `Array.prototype.splice` method.
+   *
+   * @type {Function}
+   * @private
+   */
+  var A_SPLICE = Array.prototype.splice;
+
+  /**
+   * Matches JavaScript end-of-line and block comments.
+   *
+   * @type {RegExp}
+   * @private
+   */
+  var COMMENT_RE = /(?:\/\*[\s\S]*?\*\/|\/\/.*)(?:[\n\r])*/g;
+
+  /**
+   * Free variable names expected by CommonJS modules.
+   *
+   * @type {Array.<string>}
+   * @private
+   */
+  var COMMON_JS_DEPENDENCIES = [ 'require', 'exports', 'module' ];
+
+  /**
+   * Values that match this regular expression cannot be AMD module IDs.
+   *
+   * A module ID is a string of “terms” delimited by forward slashes.
+   * A term must be a camel case identifier, `.`, or `..`.
+   * A module ID cannot have a file-name extension.
+   *
+   * @const
+   * @type {RegExp}
+   * @private
+   */
+  var INVALID_AMD_ID_RE = /(?:[^_A-Za-z\.\/]|\.{3,})/;
+
+  /**
+   * A shorcut for calling the `Object.prototype.toString` method.
+   *
+   * @type {Function}
+   * @private
+   */
+  var O_TO_STRING = Object.prototype.toString;
+
+  /**
+   * Matches relative AMD module IDs.
+   *
+   * @type {RegExp}
+   * @private
+   */
+  var RELATIVE_AMD_ID_RE = /^\.{1,2}\//;
+
+  /**
+   * Extracts `require(...)` calls from moodule source code.
+   *
+   * @type {RegExp}
+   * @private
+   */
+  var REQUIRE_RE = /require\s*?\(\s*(['"])(.*?[^\\])(?:\1)\s*\)*/g;
+
+  /**
+   * The first <script> element in a browser context, before which module
+   * <script> elements will be inserted to load their source code.
+   *
+   * @type {HTMLScriptElement}
+   * @private
+   */
+  var SIBLING = dom.getElementsByTagName('script')[0];
+
+  // --------------------------------------------------------------------------
+  // Local Variables
+
+  /**
+   * Modules indexed herein have at least been partially defined.
+   *
+   * @type {Object.<string, *>}
+   * @private
+   */
+  var cache = {};
+
+  /**
+   * Modules indexed herein are being loaded.
+   *
+   * @type {Object.<string, *>}
+   * @private
+   */
+  var loading = {};
+
+  /**
+   * Modules indexed herein have handlers waiting for the module to load
+   * (i.e., to have been partially defined and added to `cache`).
+   *
+   * @type {Object.<string, *>}
+   * @private
+   */
+  var listeners = {};
+
+ /**
+  * IDs indexed herein have been normalized; use this index to convert between
+  * a normalized ID and an original, unaltered ID.
+  *
+  * @type {Object.<string, string>}
+  * @private
+  */
+  var reverseMap = {};
+
+  // --------------------------------------------------------------------------
+  // Common Config Variables
+
+  // See http://goo.gl/iymjix for more information.
+
+  /**
+   * The root used for relative ID and Common Config path resolutions.
+   *
+   * @type {string}
+   * @private
+   */
+  var baseUrl = '.';
+
+  /**
+   * Defines aliases (module ID prefixes) for path values.
+   *
+   * @type {Object.<string, string>}
+   * @private
+   */
+  var paths;
+
+  /**
+   * Defines dependencies, exports, and factory functions for non-AMD scripts.
+   *
+   * @type {(Array.<string>|Object.<string, (Array.<string>|string|Function)>)}
+   * @private
+   */
+  var shim;
+
+  // --------------------------------------------------------------------------
+  // Asynchronous Module Definition (AMD) API
+
+  // Module definition typically proceeds as follows:
+  //
+  // (1) A module is requested -- for example, via `require(['module'], ...)`.
+  // (2) The module is loaded via `load('module', ...)`.
+  // (3) The script source for the module is loaded by inserting a <script>
+  //     element into the DOM.
+  // (4) The module’s `define()` call is executed, producing a list of depend-
+  //     encies and a method that, when called, will set up the module’s in-
+  //     ternals and export its public API.
+  //
+  // Note: At this point, we often do not know what the module’s ID is. Modules
+  // are loaded asynchronously so the order in which each module’s `define()`
+  // call is executed won’t be deterministic.
+  //
+  // (5) The onLoad() handler for #3 runs, marrying the ID, which is now known
+  //     for the module that just finished loading, with the dependencies and
+  //     API-exporting method from #4.
+  // (6) At this point, if there are any unmet dependencies, we start over at
+  //     #2 for each dependent module. Otherwise, we invoke the API-exporting
+  //     method with a list of the specified (and now fulfilled) dependencies.
+  //
+  // In some cases, we know the module’s ID during #4 and we can short-circuit
+  // this process. At various points, we will patch up dependencies in order to
+  // reconcile with CommonJS modules and to achieve certain semantics specified
+  // by the AMD standard (for example, to provide a local `require()` for each
+  // module that depends on one).
+
+  /**
+   * Registers the module named by `opt_id` and initialized by `factory` so
+   * that it can be referenced by other modules.
    *
    * @param {string=} opt_id A valid AMD module ID.
    * @param {Array.<string>=} opt_dependencies A list of valid AMD
    *     module IDs on which the registered module depends.
-   * @param {!Object} exporter Either (a) the function that will be executed
+   * @param {!Object} factory Either (a) the function that will be executed
    *     to instantiate the module or (b) the object that will be assigned as
    *     the exported value of the module.
    *
    * @public
    */
-  function define(opt_id, opt_dependencies, exporter) {
+  function define(opt_id, opt_dependencies, factory) {
+    // ------------------------------------------------------------------------
+    // Overloading
+
     if (arguments.length === 1) {
-      exporter = arguments[0];
-      opt_id = null;
-      opt_dependencies = null;
+      factory = arguments[0];
+      opt_id = undefined;
+      opt_dependencies = undefined;
     } else if (arguments.length === 2) {
-      exporter = arguments[1];
+      factory = arguments[1];
 
       if (isString(arguments[0])) {
-        opt_dependencies = null;
+        opt_dependencies = undefined;
       } else if (isArray(arguments[0])) {
         opt_dependencies = arguments[0];
-        opt_id = null;
+        opt_id = undefined;
       }
     }
+
+    // ------------------------------------------------------------------------
+    // Validation
 
     if (opt_id) {
-      if (!isString(opt_id)) {
-        throw new TypeError('@param opt_id must be a module ID string.');
+      if (!isString(opt_id) || INVALID_AMD_ID_RE.test(opt_id)) {
+        throw TypeError('@param opt_id must be a valid module ID string.');
       }
 
-      var id = new AmdId(opt_id);
-
-      if (id.isRelative()) {
-        throw new TypeError('@param opt_id cannot be relative.');
+      if (RELATIVE_AMD_ID_RE.test(opt_id)) {
+        throw TypeError('@param opt_id cannot be relative.');
       }
     }
 
-    if (opt_dependencies) {
-      if (!isArray(opt_dependencies)) {
-        throw new TypeError('@param opt_dependencies must be an array of '
-          + 'module ID strings.');
+    if (opt_dependencies && !isArray(opt_dependencies)) {
+      throw TypeError(
+          '@param opt_dependencies must be an array of module ID strings.');
+    }
+
+    if (!isObject(factory)) {
+      throw TypeError('@param factory must be a function or an object.');
+    }
+
+    // ------------------------------------------------------------------------
+    // Dependency Discovery
+
+    var dependencies = opt_dependencies || [];
+    var fn = isFunction(factory) ? factory : function () { return factory; };
+    var indexOfRequire = -1;
+
+    if (dependencies.length === 0 && fn.length > 0) {
+      dependencies = COMMON_JS_DEPENDENCIES.slice(0, fn.length);
+      indexOfRequire = 0;
+    } else {
+      indexOfRequire = dependencies.indexOf('require');
+    }
+
+    if (indexOfRequire > -1) {
+      var match;
+      var src = fn.toString().replace(COMMENT_RE, '');
+      var map = {};
+
+      // Track the dependencies we discover to avoid duplicates.
+      dependencies.forEach(function (dependency, index) {
+        map[dependency] = true;
+      });
+
+      REQUIRE_RE.lastIndex = 0;
+      while ((match = REQUIRE_RE.exec(src))) {
+        var dependency = match[2];
+        if (!map[dependency]) {
+          dependencies.push(dependency);
+          map[dependency] = true;
+        }
       }
-    }
+    };
 
-    if (!isObject(exporter)) {
-      throw new TypeError('@param exporter must be an object.');
-    }
+    // ------------------------------------------------------------------------
+    // Definition
 
-    AmdLoader.addPartial(exporter, opt_dependencies, opt_id);
+    var module = new Module(opt_id, dependencies, fn);
+
+    if (opt_id && !loading[opt_id]) {
+      setTimeout(function () {
+        cache[opt_id] = module;
+        module.actuate();
+      }, 0);
+    } else {
+      onLoad.module = module;
+    }
   }
 
-  /**
-   * Designates that {@code define} conforms with the AMD API, helping to avoid
-   * conflict with other possible {@code define} functions that do not.
-   *
-   * @public
-   */
-  define['amd'] = {};
+  define.amd = {};
 
   /**
-   * Either (a) synchronously obtains a reference to one {@code dependency}
+   * Either (a) synchronously obtains a reference to one `dependencies`
    * specified as a string literal AMD module ID or (b) asynchronously loads
-   * multiple resources when {@code dependency} is an array of string literals,
-   * executing {@code opt_callback} after all of the required resources have
-   * finished loading.
+   * multiple resources when `dependencies` is an array of string literals,
+   * executing `opt_callback` after all of the required resources have finished
+   * loading.
    *
-   * @param {!(string|Array.<string>)} dependency Either (a) one valid string
-   *     literal AMD module ID or (b) an array of such IDs.
+   * @param {!(string|Array.<string>)} dependencies Either (a) one valid
+   *     string literal AMD module ID or (b) an array of such IDs.
    * @param {Function=} opt_callback The function that should be executed
-   *     asynchronously after an array of {@code dependency} resources have
+   *     asynchronously after an array of `dependencies` resources have
    *     finished loading.
    *
-   * @return {(undefined|Object)} {@code Object} when a single resource is
-   *     required and synchronously obtained; {@code undefined} otherwise.
+   * @return {(Object|undefined)} `Object` when a single resource is required
+   *     and synchronously obtained; `undefined` otherwise.
    *
    * @public
    */
-  function require(dependency, opt_callback) {
-    if (isArray(dependency)) {
-      requireAsync(dependency, opt_callback);
+  function require(dependencies, opt_callback) {
+    if (isArray(dependencies) && isFunction(opt_callback)) {
+      new Module(undefined, dependencies, opt_callback).actuate();
+    } else if (isString(dependencies)) {
+      var module = cache[normalize(dependencies, this.id)];
+      return module.exports;
     } else {
-      return requireSync(dependency);
+      throw TypeError('require() called with invalid arguments.');
     }
   }
 
-  require.config = function (object) {
-    baseUrl = object.baseUrl;
-    paths = object.paths;
+  /**
+   * Implements the `baseUrl`, basic `paths` (i.e., without failover), and
+   * `shim` AMD Common Config API. See http://goo.gl/iymjix for more
+   * information.
+   *
+   * @param {!Object.<string, *>} object An AMD Common Config object.
+   */
+  require.config = function config(object) {
+    baseUrl = object.baseUrl || baseUrl;
+    paths = object.paths || paths;
+    shim = object.shim || shim;
   };
 
   /**
-   * Converts a string including a module ID and an extension to a URL path.
+   * Converts a string including an extension to a URL relative to the module
+   * from which it is called.
    *
-   * @param {string} resourceId The string to convert to a URL path.
+   * @param {!string} resourceId The string to convert to a URL.
    *
-   * @return {string} The URL path corresponding to {@code resourceId}.
+   * @return {!string} The URL corresponding to `resourceId`, relative to the
+   *     current module context.
    *
    * @public
    */
   require.toUrl = function (resourceId) {
-    return new AmdId(resourceId).toUri();
+    return normalize(resourceId, this.id);
   };
 
   // -------------------------------------------------------------------------
-  // AMD API Helpers
-
-  // ---------------------------------------------------------------
-  // AMD Require Implementations
+  // Minimal Utilities
 
   /**
-   * Asynchronously loads the resources specified by {@code dependencies} and
-   * executes {@code callback} after they have all finished loading.
+   * Determines if reference `v` is an array.
    *
-   * @param {!Array.<string>} dependencies A list of valid string literal AMD
-   *     module IDs to be loaded asynchronously.
-   * @param {!Function} callback The function that should be executed after
-   *     all of the resources specified by {@code dependencies} have finished
-   *     loading.
+   * @param {*} v The reference to test.
    *
-   * @private
+   * @return {!boolean} `true` if `v` is an array; `false` otherwise.
+   *
+   * @public
    */
-  function requireAsync(dependencies, callback) {
-    var x = 0
-      , n = dependencies.length
-      , skipped = 0
-      ;
-
-    function fn() {
-      if (n === 0) {
-        callback.apply(null, AmdLoader.getModules(dependencies));
-      }
-
-      --n;
-    }
-
-    for (; x < n; ++x) {
-      var id = new AmdId(dependencies[x]);
-      if (AmdLoader.getModule(id)) {
-        ++skipped;
-        continue;
-      }
-
-      AmdLoader.load(id, fn);
-    }
-
-    n -= skipped;
-
-    fn();
+  function isArray(v) {
+    return v && O_TO_STRING.call(v) === '[object Array]';
   }
 
   /**
-   * Synchronously obtains a reference to the resource specified by
-   * {@code dependency}.
+   * Determines if reference `v` is a function.
    *
-   * @param {!string} dependency A valid string literal AMD module ID.
+   * @param {*} v The reference to test.
    *
-   * @return {Object} The exported interface of the required module.
+   * @return {!boolean} `true` if `v` is a function; `false` otherwise.
    *
-   * @throws {ReferenceError} If the required module is not defined.
+   * @public
+   */
+  function isFunction(v) {
+    return v && typeof v === 'function';
+  }
+
+  /**
+   * Determines if reference `v` is a non-primitive, non-null object type; not
+   * `boolean`, `number`, `string`, `null`, or `undefined`, but any other data
+   * type that can be extended dynamically with properties and methods such as
+   * the primitive wrappers `Boolean`, `Number`, `String`, as well as built-in
+   * types like `Array`, `Date`, `Function`, `Object`, `RegExp`, and others.
+   *
+   * @param {*} v The reference to test.
+   *
+   * @return {!boolean} `true` if `v` is a string; `false` otherwise.
+   *
+   * @public
+   */
+  function isObject(v) {
+    return v && typeof v === 'object' || typeof v === 'function';
+  }
+
+  /**
+   * Determines if reference `v` is a string.
+   *
+   * @param {*} v The reference to test.
+   *
+   * @return {!boolean} `true` if `v` is a string; `false` otherwise.
+   *
+   * @public
+   */
+  function isString(v) {
+    return typeof v === 'string' || O_TO_STRING.call(v) === '[object String]';
+  }
+
+  /**
+   * Cleans up an identifier, replacing redundant forward slash delimiters,
+   * removing current directory (`.`) terms, and removing parent directory
+   * (`..`) terms along with their corresponding directory names. For example:
+   * `/foo/bar//baz/./asdf/quux/..` becomes `/foo/bar/baz/asdf`.
+   *
+   * @param {!string} id The AMD module ID to clean cup.
+   *
+   * @return {!string} The normalized module ID.
    *
    * @private
    */
-  var requireSync = isCommandLine
-    ? ctx.require
-    : function requireSync(dependency) {
-        try  {
-          var id = new AmdId(dependency);
-        } catch (ex) {
-          throw new TypeError('@param dependency must be a valid ' +
-              'module ID string.');
-        }
+  function normalize(id, opt_relativeTo) {
+    var relativeTo = reverseMap[opt_relativeTo] || opt_relativeTo;
+    var match = ABSOLUTE_PATH_RE.exec(id);
+    var protocol = match ? match[1] : '';
+    var normalized = [];
+    var terms;
+    var result;
 
-        var module = AmdLoader.getModule(id);
+    if (RELATIVE_AMD_ID_RE.test(id) && relativeTo) {
+      terms = relativeTo.split('/').slice(0, -1).concat(id.split('/'));
+    } else if (paths) {
+      var pathsBySpecificity = Object.keys(paths).sort().reverse();
 
-        if (!module) {
-          throw new ReferenceError('Module "' + dependency +
-              '" is not defined.');
-        }
+      for (var x = 0, n = pathsBySpecificity.length; x < n; ++x) {
+        var path = pathsBySpecificity[x];
 
-        return module;
-      };
+        if (id.indexOf(path) === 0) {
+          match = ABSOLUTE_PATH_RE.exec(paths[path]);
+          protocol = match ? match[1] : '';
+          terms = (match ? match[2] : paths[path]).split('/');
 
-  // ---------------------------------------------------------------
-  // AMD Module Loader
-
-  /** @private */
-  var AmdLoader = {};
-
-  (function (exports) {
-    var dom = gspace.document
-      , sibling = dom && dom.getElementsByTagName('script')[0]
-      , cache = { rig: require, require: require, exports: true, module: true }
-      , queue = []
-      , queued = {}
-      ;
-
-    /**
-     * Loads module {@code id} and executes {@code callback} when it is ready.
-     *
-     * @param {!AmdId} id The ID of the module to load.
-     * @param {!Function} callback The function that will be executed when the
-     *     module is ready.
-     *
-     * @public
-     */
-    var load = isCommandLine
-      ? function load(id, callback) {
-          var fqid = id.isRelative() ? new AmdId(id, process.cwd()) : id;
-
-          process.nextTick(function () {
-            cacheModule(id, requireSync(fqid.toString()));
-            onLoad(id, callback);
-          });
-        }
-      : function load(id, callback) {
-          var el = dom.createElement('script');
-          el.charset = 'utf-8';
-          el.async = true;
-          el.src = id.toUri();
-          el.onload = onScriptLoad.bind(null, el, id, callback);
-
-          sibling.parentNode.insertBefore(el, sibling);
-        };
-
-    /**
-     * Builds a list of dependencies for any queued partially defined modules.
-     *
-     * @paran {!AmdId} The ID of a partially defined module.
-     *
-     * @return {!Array.<string>} An array of string literals identifying the
-     *     queued modules' dependencies or an empty array if there are none.
-     *
-     * @private
-     */
-    function getDependencies(id) {
-      var x = 0
-        , n = queue.length
-        , fqid = isCommandLine && id.isRelative()
-            ? new AmdId(id, process.cwd())
-            : id
-        , relativeTo = fqid.getModname()
-        , result = []
-        ;
-
-      for (; x < n; ++x) {
-        var dependencies = queue[x].getDependencies();
-        for (var j = 0, jn = dependencies.length; j < jn; ++j) {
-          // This has the (desireable and necessary) side effect of relitivizing
-          // the partial's dependencies.
-          dependencies[j] = new AmdId(dependencies[j], relativeTo);
-
-          if (result.indexOf(dependencies[j]) === -1) {
-            result.push(dependencies[j]);
-          }
-        }
-      }
-
-      return result;
-    }
-
-    /**
-     * Continues composing a module after it has been loaded.
-     *
-     * @param {!AmdId} id The ID of the module loaded.
-     * @param {!Function} callback The function that will be executed once all
-     *     of the queued partial module definitions have been finalized.
-     *
-     * @private
-     */
-    function onLoad(id, callback) {
-      var partials = queue.slice()
-        , dependencies = getDependencies(id)
-        ;
-
-      queue = [];
-
-      requireAsync(dependencies, function () {
-        while (partials.length > 0) {
-          var partial = partials.shift()
-            , exporter = partial.exporter
-            , uid = isFunction(exporter) ? String(exporter) : ''
-            ;
-
-          if (queued[uid]) {
-            delete queued[uid];
+          if (id.length > path.length) {
+            spliceTail(terms, id.substr(path.length).split('/'));
           }
 
-          partial.finalize(id);
+          spliceHead(terms, baseUrl.split('/'));
+          break;
+        } else {
+          path = undefined;
         }
-
-        callback();
-      });
-    }
-
-    /**
-     * Handles load events for scripts dynamically inserted into the DOM.
-     *
-     * @param {!Element} el A reference to the script tag.
-     * @param {!AmdId} id The ID of the module loaded by {@code el}.
-     * @param {!Function} callback The function that will be executed once all
-     *     of the queued partial module definitions have been finalized.
-     *
-     * @private
-     */
-    function onScriptLoad(el, id, callback) {
-      onLoad(id, callback);
-
-      el.parentNode.removeChild(el);
-      delete el.onload;
-      el = null;
-    }
-
-    /**
-     * Queues a new partially defined module unless the same module has already
-     * been defined or is currently being defined.
-     *
-     * @param {!Object} exporter Either (a) the function that will be executed
-     *     to instantiate the module or (b) the object that will be assigned as
-     *     the exported value of the module.
-     * @param {Array.<(AmdId|string)>=} opt_dependencies A list of valid AMD
-     *     module IDs on which the partial module depends.
-     * @param {AmdId=} opt_id A valid AMD module ID.
-     *
-     * @public
-     */
-    function addPartial(exporter, opt_dependencies, opt_id) {
-      var uid = isFunction(exporter) ? String(exporter) : '';
-
-      if (queued[uid] !== undefined || (opt_id && getModule(opt_id))) {
-        return;
-      }
-
-      if (uid !== '') {
-        queued[uid] = true;
-      }
-
-      var partial = new AmdPartial(exporter, opt_dependencies);
-
-      if (opt_id) {
-        partial.setId(opt_id);
-      }
-
-      queue.push(partial);
-    }
-
-    /**
-     * Adds the exported interface {@code module} to the module cache with key
-     * {@code id}.
-     *
-     * @param {string} id The AMD module ID to use as a key for lookups.
-     * @param {Object} module The exported module interface to cache.
-     */
-    function cacheModule(id, module) {
-      if (id) {
-        cache[id] = module;
       }
     }
 
-    /**
-     * @param {(AmdId|string)} A valid AMD module ID.
-     *
-     * @return {Object} The module corresponding to the specified {@code id}.
-     *
-     * @public
-     */
-    function getModule(id) {
-      return cache[new AmdId(id)];
-    }
-
-    /**
-     * @param {Array.<(AmdId|string)>} A list of valid AMD module IDs.
-     *
-     * @return {Array.<Object>} An array of modules corresponding to the
-     *     specified {@code dependencies}.
-     *
-     * @public
-     */
-    function getModules(dependencies) {
-      var list = []
-        , x = 0
-        , n = dependencies.length
-        ;
-
-      for (; x < n; ++x) {
-        list.push(getModule(dependencies[x]));
+    if (!terms) {
+      if (match) {
+        // Path is absolute.
+        terms = match[2].split('/');
+      } else {
+        // Path is relative to `baseUrl`.
+        terms = (baseUrl + '/' + id).split('/');
       }
-
-      return list;
     }
 
-    exports.load = load;
-    exports.addPartial = addPartial;
-    exports.cacheModule = cacheModule;
-    exports.getModule = getModule;
-    exports.getModules = getModules;
-  })(AmdLoader);
+    for (var x = 0, n = terms.length; x < n; ++x) {
+      var term = terms[x];
 
-  // ---------------------------------------------------------------
-  // AMD Module ID
-
-  /**
-   * A convenient wrapper for a string literal AMD module identifier.
-   *
-   * @param {!string} value A valid string literal module identifier.
-   * @param {string=} opt_relativeTo A valid top-level module identifier.
-   *
-   * @private
-   * @constructor
-   */
-  function AmdId(value, opt_relativeTo) {
-    if (!AmdId.isValid(value)) {
-      throw new TypeError('@param value >' + value +
-          '< must be a valid, useable AMD module ID string.');
-    }
-
-    if (value.indexOf('.') === 0 && opt_relativeTo) {
-      try {
-        if ((opt_relativeTo = new AmdId(opt_relativeTo)).isRelative()) {
-          throw 0;
-        }
-      } catch (ex) {
-        throw new TypeError('@param opt_relativeTo >' + opt_relativeTo +
-            '< must be a valid, useable top-level AMD module ID string.');
-      }
-
-      this.relativeTo = opt_relativeTo;
-    }
-
-    this.value = value;
-  }
-
-  subjoin(AmdId, String);
-
-  /**
-   * @param {string} s The identfier to validate.
-   *
-   * @return {boolean} {@code true} If the specified identifer {@code s} can be
-   *     used to look up and load an AMD module; {@code false} otherwise.
-   *
-   * @private
-   */
-  AmdId.isValid = (function () {
-    var invalid = /(?:[^A-Za-z\.\/]|\.{3,})/
-      , useable = /[A-Za-z]/
-      ;
-
-    return function (s) {
-      if (s && isString(s) && !invalid.test(s) && useable.test(s)) {
-        return true;
-      }
-
-      return false;
-    };
-  });
-
-  /**
-   * @return {string} {@code true} If this AMD module ID must be resolved in
-   *     relation to a top-level module ID (that is, if this module ID begins
-   *     with {@code '.'} or {@code '..'}); {@code false} otherwise.
-   *
-   * @public
-   */
-  AmdId.prototype.isRelative = function () {
-    return this.terms
-      ? this.terms[0].indexOf('.') === 0
-      : this.value.indexOf('.') === 0
-      ;
-  };
-
-  /**
-   * @return {string} The directory portion of this AMD module ID independent
-   *     of its URI (for example, {@code '/foo/baz/asdf'} in
-   *     {@code '/foo/bar/asdf/quux'}); {@code getModname()} and
-   *     {@code getDirname()} will be equal unless the path to the module has
-   *     been interpolated with {@code require.confg()}.
-   *
-   * @public
-   */
-  AmdId.prototype.getModname = function () {
-    if (this.modname === void(0)) {
-      this.modname = this.getDirname();
-    }
-
-    return this.modname;
-  };
-
-  /**
-   * @return {string} The directory portion of this AMD module ID's URI (for
-   *     example, {@code '/foo/bar/asdf'} in {@code '/foo/bar/asdf/quux'}).
-   *
-   * @public
-   */
-  AmdId.prototype.getDirname = function () {
-    if (this.dirname === void(0)) {
-      this.dirname = this.slice(0, -1).join('/');
-    }
-
-    return this.dirname;
-  };
-
-  /**
-   * @return {string} The last portion of this AMD module ID (for example,
-   *     {@code 'quux'} in {@code '/foo/bar/baz/asdf/quux'}).
-   *
-   * @public
-   */
-  AmdId.prototype.getBasename = function () {
-    if (this.basename === void(0)) {
-      this.basename = this.slice(-1)[0];
-    }
-
-    return this.basename;
-  };
-
-  /**
-   * @return {string} The filename extension of this ID if it has one;
-   *     {@code ''} otherwise.
-   *
-   * @public
-   */
-  AmdId.prototype.getExtension = function () {
-    if (this.extension === void(0)) {
-      var basename = this.getBasename()
-        , index = basename.lastIndexOf('.')
-        ;
-
-      this.extension = index > 0 ? basename.slice(index) : '';
-    }
-
-    return this.extension;
-  };
-
-  /**
-   * @return {string} {@code true} If this AMD module ID ends with a filename
-   *     extension such as {@code '.js'}; {@code false} otherwise.
-   *
-   * @public
-   */
-  AmdId.prototype.hasExtension = function () {
-    return !!this.getExtension();
-  };
-
-  /**
-   * @param {number=} begin The zero-based index at which to begin copying this
-   *     module ID's terms; a negative value specifies an offset from the end
-   *     of the terms and {@code undefined} is equivalent to index {@code 0}.
-   * @param {number=} end The zero-based index up to which this module ID's
-   *     terms should be copied (not including the index itself); a negative
-   *     value specifies an offset from the end of the terms and if
-   *     {@code end} is {@code undefined}, then all of the terms from
-   *     {@code begin} to the end of the sequence will be copied.
-   *
-   * @return {!Array.<string>} A shallow copy of this module ID's normalized
-   *     terms from {@code begin} up to (but not including) {@code end} index,
-   *     excluding any forward slash delimiters.
-   *
-   * @private
-   */
-  AmdId.prototype.slice = function (begin, end) {
-    if (!this.terms) {
-      this.normalize();
-    }
-
-    return this.terms.slice(begin, end);
-  }
-
-  /**
-   * @return {string} The canonical URI for this AMD module ID.
-   *
-   * @public
-   */
-  AmdId.prototype.toUri = function () {
-    if (!this.uri) {
-      this.uri = this.normalize() + (this.hasExtension() ? '' : '.js');
-    }
-
-    return this.uri;
-  };
-
-  /**
-   * Cleans up an array of path components by removing empty terms, current
-   * directory ({@code '.'}) terms, and parent directory ({@code '..'}) terms
-   * along with their corresponding directory names (for example, {@code
-   * ['foo','bar','','baz','.','asdf', 'quux','..']} becomes {@code
-   * ['foo','bar','baz','asdf']}).
-   *
-   * @param {!Array.<string>} parts The path components to clean cup.
-   *
-   * @return {!Array.<string>} The normalized path components.
-   *
-   * @private
-   */
-  function normalize(parts) {
-    var normalized = []
-      , partZero = parts[0] === '..' || parts[0] === '.' || parts[0] === ''
-          ? parts[0]
-          : null
-      ;
-
-    for (var x = 0, n = parts.length; x < n; ++x) {
-      var part = parts[x];
-
-      if (part === '.' || part === '') {
+      if (term === '.' || term === '') {
         continue;
-      } else if (part === '..') {
+      } else if (term === '..') {
         normalized.pop();
       } else {
-        normalized.push(part);
+        normalized.push(term);
       }
     }
 
-    // Retain a leading / or ./ or ../ if there is one.
-    if (partZero !== null) {
-      normalized.unshift(partZero);
-    }
+    result = protocol + normalized.join('/');
+    reverseMap[result] = path || id;
 
-    return normalized;
+    return result;
   }
 
   /**
-   * Cleans up this AMD module ID by replacing redundant forward slash
-   * delimiters, removing current directory ({@code '.'}) terms, and removing
-   * parent directory ({@code '..'}) terms along with their corresponding
-   * directory names (for example, {@code '/foo/bar//baz/./asdf/quux/..'}
-   * becomes {@code '/foo/bar/baz/asdf'}).
+   * Converts a dotted identifier (for example, `'some.thing'`) into the
+   * corresponding value from the global namespace.
+   *
+   * @param {!string} identifier A dotted global property name.
+   *
+   * @return {*} The corresponding value from the global namespace.
    *
    * @private
    */
-  AmdId.prototype.normalize = function () {
-    if (!this.normalized) {
-      var value = this.value
-        , parts = value.split('/')
-        ;
+  function resolve(identifier) {
+    var terms = identifier.split('.');
+    var node = global;
 
-      if (paths) {
-        var pathsBySpecificity = Object.keys(paths).sort().reverse();
-
-        for (var k = 0, kn = pathsBySpecificity.length; k < kn; ++k) {
-          var path = pathsBySpecificity[k];
-          if (value.indexOf(path) === 0) {
-            var split = paths[path].split('/');
-
-            // This is equivalent to dirname had the path not been
-            // interpolated.
-            this.modname = normalize(parts).slice(0, -1).join('/');
-
-            if (value.length > path.length) {
-              parts = split.concat(value.substr(path.length).split('/'));
-            } else {
-              parts = split;
-            }
-
-            break;
-          }
-        }
-      }
-
-      if (this.isRelative() && this.relativeTo !== void(0)) {
-        parts = this.relativeTo.slice().concat(parts);
-      }
-
-      if (baseUrl) {
-        parts = baseUrl.split('/').concat(parts);
-      }
-
-      this.terms = normalize(parts);
-      this.normalized = this.terms.join('/');
+    for (var x = 0, n = terms.length; x < n && node; ++x) {
+      node = node[terms[x]];
     }
 
-    return this.normalized;
-  };
-
-  /** @inheritDoc */
-  AmdId.prototype.toString =
-  /** @inheritDoc */
-  AmdId.prototype.valueOf = function () {
-    return this.normalize();
-  };
-
-  // ---------------------------------------------------------------
-  // Partial AMD Module Definition
+    return node;
+  }
 
   /**
-   * A placeholder for an incompletely initialized module. When the definition
-   * can be completed, call {@code AmdPartial.prototype.finalize}.
+   * Adds the elements of array `b` to to the beginning of array `a`, modifying
+   * `a` in-place.
    *
-   * @param {!Object} exporter Either (a) the function that will be executed
-   *     to instantiate the module or (b) the object that will be assigned as
-   *     the exported value of the module.
-   * @param {Array.<(AmdId|string)>=} opt_dependencies A list of valid AMD
-   *     module IDs on which the partial module depends.
+   * @param {!Array.<*>} a The array to modify.
+   * @param {!Array.<*>} b The array whose values will be added to `a`.
    *
    * @private
-   * @constructor
    */
-  function AmdPartial(exporter, opt_dependencies) {
-    this.dependencies = opt_dependencies
-    this.module = {};
+  function spliceHead(a, b) {
+    A_SPLICE.bind(a, 0, 0).apply(undefined, b);
+  }
 
-    if (isFunction(exporter)) {
-      this.exports = {};
-      this.exporter = exporter;
+  /**
+   * Adds the elements of array `b` to to the end of array `a`, modifying `a`
+   * in-place.
+   *
+   * @param {!Array.<*>} a The array to modify.
+   * @param {!Array.<*>} b The array whose values will be added to `a`.
+   *
+   * @private
+   */
+  function spliceTail(a, b) {
+    A_SPLICE.bind(a, a.length, 0).apply(undefined, b);
+  }
+
+  // --------------------------------------------------------------------------
+  // Module Loader
+
+  /**
+   * Loads module {@code key} and executes {@code callback} when it is ready.
+   *
+   * @param {!string} key The ID of the module to load.
+   * @param {!Function} callback The function that will be executed when the
+   *     module is loaded.
+   *
+   * @private
+   */
+  function load(key, callback) {
+    if (!isFunction(callback)) {
+      throw TypeError('@param callback is not a function.');
+    }
+
+    if (cache[key]) {
+      callback(undefined, cache[key]);
+      return;
+    }
+
+    if (!loading[key]) {
+      loading[key] = true;
+      script(key + '.js', onLoad.bind(undefined, key));
+    }
+
+    (listeners[key] = listeners[key] || []).push(callback);
+  };
+
+  /**
+   * Loads the script identified by `src` and invokes `callback` after it
+   * finishes loading.
+   *
+   * @param {!string} src The URL of the script to load.
+   * @param {Function=} opt_callback Run this function after the script loads.
+   *
+   * @private
+   */
+  function script(src, opt_callback) {
+    if (opt_callback && !isFunction(opt_callback)) {
+      throw TypeError('@param opt_callback is not a function.');
+    }
+
+    var el = dom.createElement('script');
+    el.charset = 'utf-8';
+    el.async = true;
+    el.src = src;
+    el.onload = function () {
+      setTimeout(function () {
+        el.parentNode.removeChild(el);
+        el = null;
+      }, 0);
+
+      opt_callback && opt_callback();
+    }
+
+    SIBLING.parentNode.insertBefore(el, SIBLING);
+  }
+
+  /**
+   * Continues composing a module after it has been loaded.
+   *
+   * @param {!string} key The ID of the module loaded.
+   *
+   * @private
+   */
+  function onLoad(key) {
+    var module = onLoad.module;
+    delete onLoad.module;
+    delete loading[key];
+
+    if (module) {
+      module.id = module.id || key;
     } else {
-      this.exports = exporter;
+      module = new Module(key);
     }
-  }
+
+    cache[key] = module;
+    module.actuate();
+
+    var callbacks = listeners[key];
+    if (callbacks) {
+      while (callbacks.length) {
+        setTimeout((function (f) {
+          f(undefined, module);
+        })(callbacks.shift()), 0);
+      }
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // Module
 
   /**
-   * Adds the specified module ID to this definition and, as a side effect,
-   * immediately exports the module's interface if it currently has one. Note:
-   * only the first call with a defined {@code id} will set this module's ID.
+   * An AMD module or alien script.
    *
-   * @public
+   * @param {string=} id A valid AMD module ID.
+   * @param {Array.<string>=} dependencies A list of valid AMD module IDs on
+   *     which this module depends.
+   * @param {Function=} factory The function that instantiates this module.
    */
-  AmdPartial.prototype.setId = function (id) {
-    if (!this.id) {
-      this.id = new AmdId(id);
+  function Module(id, dependencies, factory) {
+    this.id = id;
+    this.dependencies = dependencies || [];
+    this.factory = factory;
 
-      this.module.id = this.id.toString();
-      this.module.uri = this.id.toUri();
-    }
+    this.listeners = [];
+    this.exports = {};
+    this.modules = new Array(this.dependencies.length);
 
-    if (this.exports) {
-      AmdLoader.cacheModule(this.id, this.exports);
+    this.defined = false;
+  }
+
+  /** @private */
+  var P = Module.prototype;
+
+  /**
+   * Loads this module’s dependencies.
+   */
+  P.actuate = function actuate() {
+    var dependencies = this.dependencies;
+    var n = dependencies.length;
+
+    if (n) {
+      for (var x = 0; x < n; ++x) {
+        var dependency = dependencies[x] = normalize(dependencies[x], this.id);
+
+        if (COMMON_JS_DEPENDENCIES.indexOf(dependency) > -1) {
+          setTimeout(makeCommonJsDependency.bind(this, dependency), 0);
+        } else {
+          this.shim(dependency);
+        }
+      }
+    } else {
+      setTimeout(this.define.bind(this), 0);
     }
   };
 
   /**
-   * Builds a list of dependencies for this module, parsing {@code require}
-   * expressions from the body of the module's exporter function if necessary.
+   * Creates a shim for `dependency`, if necessary, then loads it.
    *
-   * @return {!Array.<string>} An array of string literals identifying this
-   *     module's dependencies or an empty array if this module has none.
-   *
-   * @public
+   * @param {!string} dependency The ID of the module to load.
    */
-  AmdPartial.prototype.getDependencies = (function () {
-    var commentRe = /(?:\/\*[\s\S]*?\*\/|\/\/.*)(?:[\n\r])*/g
-      , requireRe = /require\s*?\(\s*(['"])(.*?[^\\])(?:\1|['"])\s*\)*/g
-      , cjsDependencies = [ 'require', 'exports', 'module' ]
-      ;
+  P.shim = function shimDependency(dependency) {
+    var dependencies = [];
+    var adapter = shim && (shim[dependency] || shim[reverseMap[dependency]]);
 
-    return function () {
-      if (!this.extractedDependencies) {
-        var deps = this.dependencies;
-
-        if (!deps) {
-          deps = [];
-
-          if (this.exporter) {
-            for (var x = 0, n = Math.max(3, this.exporter.length); x < n; x++) {
-              deps.push(cjsDependencies[x]);
-            }
-          }
+    if (adapter) {
+      if (isArray(adapter)) {
+        spliceTail(dependencies, adapter);
+      } else {
+        if (adapter.deps) {
+          spliceTail(dependencies, adapter.deps);
         }
-
-        if (deps.indexOf('require') > -1) {
-          var src = this.exporter.toString().replace(commentRe, '');
-
-          requireRe.lastIndex = 0;
-          while ((match = requireRe.exec(src)) !== null) {
-            deps.push(match[2]);
-          }
-        }
-
-        this.extractedDependencies = deps;
       }
+    }
 
-      return this.extractedDependencies;
+    if (dependencies.length) {
+      var module = new Module(dependency, dependencies);
+      module.shimmed = dependency;
+      module.addDefineListener(this.removeDependency.bind(this));
+      cache[dependency] = module;
+      module.actuate();
+    } else {
+      load(dependency, onDependencyLoaded.bind(this));
+    }
+  };
+
+  /**
+   * Generates one of the three standard CommonJS free variables (`require`,
+   * `exports`, or `module`) and installs it in this module’s list of fulfilled
+   * dependencies;
+   *
+   * @param {!string} dependency The name of the CommonJS free variable to
+   *     generate.
+   */
+  function makeCommonJsDependency(dependency) {
+    var module, output, factory = function () {
+      return output;
     };
-  })();
+
+    if (dependency === 'require') {
+      output = require.bind(this);
+      output.toUrl = require.toUrl.bind(this);
+    } else if (dependency === 'exports') {
+      output = this.exports;
+    } else if (dependency === 'module') {
+      output = this;
+    }
+
+    module = new Module(dependency, [], factory);
+    module.define();
+    this.removeDependency(module);
+  };
 
   /**
-   * Builds the list of modules on which this module dependends.
+   * Registers a callback with dependency `module` to be executed after it has
+   * been fully defined and is ready to be used.
    *
-   * @return {Array.<Object>} An array of modules on which this module depends
-   *     or an empty array if this module has no dependencies.
-   *
-   * @public
+   * @param {Error=} error The exception thrown, if any, when the dependency
+   *     fails to load.
+   * @param {Module=} module The partially defined module with which to
+   *     register a callback.
    */
-  AmdPartial.prototype.getModules = function () {
-    var dependencies = this.getDependencies()
-      , x = 0
-      , n = dependencies.length
-      , modules = new Array(n)
-      ;
+  function onDependencyLoaded(error, module) {
+    if (error) {
+      console.error('Failed to load dependency.', error);
+    } else {
+      module.addDefineListener(this.removeDependency.bind(this));
+    }
+  };
 
-    for (; x < n; ++x) {
-      var id = new AmdId(dependencies[x]);
+  /**
+   * Registers a callback with this module that will be executed after the
+   * module has been fully defined.
+   *
+   * @param {!Function} callback The function to execute after this module has
+   *     been fully defined.
+   */
+  P.addDefineListener = function addDefineListener(callback) {
+    if (!isFunction(callback)) {
+      throw TypeError('@param callback is not a function.');
+    }
 
-      switch (id.toString()) {
-      case 'require':
-        modules[x] = require;
-        break;
-      case 'exports':
-        modules[x] = this.exports;
-        break;
-      case 'module':
-        modules[x] = this.module;
-        break;
-      default:
-        modules[x] = AmdLoader.getModule(id);
+    if (this.defined) {
+      callback(this);
+    } else {
+      this.listeners.push(callback);
+    }
+  };
+
+  /**
+   * Determines if this module’s dependencies have been fulfilled with the
+   * exception of `module`.
+   *
+   * @param {!Module} module The module to look for.
+   *
+   * @return {!boolean} `true` if this module is waiting exclusively on
+   *     `module`; `false` if this module has other unmet dependencies.
+   */
+  P.isBlockedBy = function isBlockedBy(module) {
+    var dependencies = this.dependencies;
+    var modules = this.modules;
+
+    for (var x = 0, n = modules.length; x < n; ++x) {
+      if (!modules[x]) {
+        if (dependencies[x] === module.id) {
+          continue;
+        }
+
+        return false;
       }
     }
 
-    return modules;
+    return true;
   };
 
   /**
-   * Completes the initialization of this partial module; after which, and
-   * assuming this module has an ID, the module's interface will be available
-   * and ready for others to use.
+   * Registers `module` as a dependency that has been met; if all dependencies
+   * have been met, this module will be fully defined as a result.
    *
-   * @param {string} resourceId The module ID string corresponding to this
-   *     module's resource, which is likely only known after the resource
-   *     file loads.
-   *
-   * @public
+   * @param {!Module} module The dependency that has been met.
    */
-  AmdPartial.prototype.finalize = function (resourceId) {
-    var exporter = this.exporter
-      , result = exporter && exporter.apply(null, this.getModules())
-      ;
+  P.removeDependency = function removeDependency(module) {
+    var dependencies = this.dependencies;
+    var modules = this.modules;
+    var unmet = 0;
+    var unmetDependency;
 
-    if (result) {
-      this.exports = result;
+    for (var x = 0, n = dependencies.length; x < n; ++x) {
+      if (module.id === dependencies[x]) {
+        modules[x] = module;
+      }
+
+      if (!modules[x]) {
+        ++unmet;
+        unmetDependency = cache[dependencies[x]];
+      }
     }
 
-    this.setId(resourceId);
+    if (unmet === 0) {
+      if (this.shimmed) {
+        if (this.shimmed === this.id) {
+          script(this.shimmed + '.js', this.define.bind(this));
+          this.shimmed = true;
+        }
+      } else {
+        this.define();
+      }
+    } else if (unmet === 1) {
+      if (unmetDependency && unmetDependency.isBlockedBy(this)) {
+        unmetDependency.removeDependency(this);
+      }
+    }
   };
 
-  // -------------------------------------------------------------------------
-  // Minimal Rig
-
-  /** @private */
-  var ostring = Object.prototype.toString;
-
   /**
-   * Determines if reference {@code value} is an array.
-   *
-   * @param {*} value The reference to test.
-   *
-   * @return {boolean} {@code true} if {@code value} is an array;
-   *     {@code false} otherwise.
-   *
-   * @private
+   * Completes this module’s definition and notifies any registered listeners
+   * that this module is ready to be used.
    */
-  function isArray(value) {
-    return !!value && ostring.call(value) === '[object Array]';
-  }
+  P.define = function define() {
+    var adapter = shim && shim[this.id];
+    var factory = adapter && adapter.init ? adapter.init : this.factory;
+    var modules = this.modules;
+    var callbacks = this.listeners;
+    var argc = modules.length;
+    var argv = new Array(argc);
 
-  /**
-   * Determines if reference {@code value} is a function.
-   *
-   * @param {*} value The reference to test.
-   *
-   * @return {boolean} {@code true} if {@code value} is a function;
-   *     {@code false} otherwise.
-   *
-   * @private
-   */
-  function isFunction(value) {
-    return !!value && typeof value === 'function';
-  }
+    for (var x = 0; x < argc; ++x) {
+      argv[x] = modules[x].exports;
+    }
 
-  /**
-   * Determines if reference {@code value} is a non-primitive, non-null object
-   * type; not {@code boolean}, {@code number}, {@code string}, {@code null},
-   * or {@code undefined}, but any other data type that can be extended
-   * dynamically with properties and methods such as the primitive wrappers
-   * {@code Boolean}, {@code Number}, @{code String}, as well as built-in types
-   * like {@code Array}, {@code Date}, {@code Function}, {@code Object},
-   * {@code RegExp}, and others.
-   *
-   * @param {*} value The value to test.
-   *
-   * @return {boolean} {@code true} if {@code value} is a string;
-   *     {@code false} otherwise.
-   *
-   * @private
-   */
-  function isObject(value) {
-    return !!value && typeof value === 'object' || typeof value === 'function';
-  }
+    var exports = factory && factory.apply(undefined, argv);
+    if (exports !== undefined) {
+      this.exports = exports;
+    } else if (adapter && adapter.exports) {
+      this.exports = resolve(adapter.exports);
+    }
 
-  /**
-   * Determines if reference {@code value} is a string.
-   *
-   * @param {*} value The value to test.
-   *
-   * @return {boolean} {@code true} if {@code value} is a string;
-   *     {@code false} otherwise.
-   *
-   * @private
-   */
-  function isString(value) {
-    return value != null && typeof value === 'string' ||
-        ostring.call(value) === '[object String]';
-  }
+    this.isBlockedBy = function isBlockedBy() { return false; };
+    this.defined = true;
 
-  /**
-   * Appends {@code subtype} to {@code opt_supertype}'s prototype chain so that
-   * {@code subtype} inherits all of the methods and properties defined by its
-   * ancestor types in the chain, including the core {@code Object} prototype;
-   * furthermore, {@code opt_supertype} will be made accessible via the
-   * {@code subtype.supertype} property (or, from within a {@code subtype}
-   * instance, the {@code this.constructor.supertype} property).
-   *
-   * @param {!Function} subtype The constructor that will inherit methods and
-   *     properties from {@code opt_supertype} by being appended to its
-   *     prototype chain.
-   * @param {Function=} opt_supertype The constructor of the prototype chain
-   *     that {@code subtype} will join, if specified; the core {@code Object}
-   *     constructor otherwise.
-   *
-   * @return {!Function} {@code subtype} after it has been subjoined with the
-   *     {@code opt_supertype} prototype chain.
-   *
-   * @private
-   */
-  function subjoin(subtype, opt_supertype) {
-    opt_supertype = opt_supertype || Object;
-    PrototypalIntermediate.prototype = opt_supertype.prototype;
-    subtype.prototype = new PrototypalIntermediate();
-    subtype.supertype = opt_supertype;
-    subtype.prototype.constructor = subtype;
+    while (callbacks.length) {
+      callbacks.pop()(this); // LIFO is important.
+    }
+  };
 
-    return subtype;
-  }
-
-  /** @private */
-  function PrototypalIntermediate() {}
-
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // Exports
 
-  gspace.define = define;
+  global.define = define;
+  global.require = require;
 
-  if (ctx.module) {
-    ctx.module.exports = require;
-  } else {
-    gspace.require = require;
-  }
-})(this);
+  // --------------------------------------------------------------------------
+  // Bootstrapping
+
+  // Looks for a data-main attribute and loads the specified script asynchron-
+  // ously. This is only intended to be used when the page has exactly one en-
+  // try point. There is no guarantee that the data-main script will finish
+  // executing before later scripts in the same page are loaded and executed.
+  (function () {
+    var els = dom.getElementsByTagName('script');
+    for (var x = 0, n = els.length, el; x < n && (el = els[x]); ++x) {
+      if (el.hasAttribute('data-main')) {
+        script(el.getAttribute('data-main'));
+        break;
+      }
+    }
+  })();
+})(this, document, TypeError);
