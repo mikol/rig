@@ -41,17 +41,12 @@
   var COMMON_JS_DEPENDENCIES = [ 'require', 'exports', 'module' ];
 
   /**
-   * Values that match this regular expression cannot be AMD module IDs.
+   * A method that does nothing.
    *
-   * A module ID is a string of “terms” delimited by forward slashes.
-   * A term must be a camel case identifier, `.`, or `..`.
-   * A module ID cannot have a file-name extension.
-   *
-   * @const
-   * @type {RegExp}
+   * @type {Function}
    * @private
    */
-  var INVALID_AMD_ID_RE = /(?:[^_A-Za-z\.\/]|\.{3,})/;
+  var NOOP = function () {};
 
   /**
    * A shorcut for calling the `Object.prototype.toString` method.
@@ -67,7 +62,7 @@
    * @type {RegExp}
    * @private
    */
-  var RELATIVE_AMD_ID_RE = /^\.{1,2}\//;
+  var RELATIVE_PATH_RE = /^\.{1,2}\//;
 
   /**
    * Extracts `require(...)` calls from moodule source code.
@@ -75,7 +70,7 @@
    * @type {RegExp}
    * @private
    */
-  var REQUIRE_RE = /require\s*?\(\s*(['"])(.*?[^\\])(?:\1)\s*\)*/g;
+  var REQUIRE_RE = /[^.]\s*require\s*?\(\s*(['"])(.*?[^\\])(?:\1)\s*\)*/g;
 
   /**
    * The first <script> element in a browser context, before which module
@@ -218,11 +213,11 @@
     // Validation
 
     if (opt_id) {
-      if (!isString(opt_id) || INVALID_AMD_ID_RE.test(opt_id)) {
-        throw TypeError('@param opt_id must be a valid module ID string.');
+      if (!isString(opt_id)) {
+        throw TypeError('@param opt_id must be a module ID string.');
       }
 
-      if (RELATIVE_AMD_ID_RE.test(opt_id)) {
+      if (RELATIVE_PATH_RE.test(opt_id)) {
         throw TypeError('@param opt_id cannot be relative.');
       }
     }
@@ -275,7 +270,7 @@
 
     var module = new Module(opt_id, dependencies, fn);
 
-    if (opt_id && !loading[opt_id]) {
+    if (opt_id && !loading[normalize(opt_id)]) {
       setTimeout(function () {
         cache[opt_id] = module;
         module.actuate();
@@ -344,281 +339,11 @@
     return normalize(resourceId, this.id);
   };
 
-  // -------------------------------------------------------------------------
-  // Minimal Utilities
-
-  /**
-   * Determines if reference `v` is an array.
-   *
-   * @param {*} v The reference to test.
-   *
-   * @return {!boolean} `true` if `v` is an array; `false` otherwise.
-   *
-   * @private
-   */
-  function isArray(v) {
-    return v && O_TO_STRING.call(v) === '[object Array]';
-  }
-
-  /**
-   * Determines if reference `v` is a function.
-   *
-   * @param {*} v The reference to test.
-   *
-   * @return {!boolean} `true` if `v` is a function; `false` otherwise.
-   *
-   * @private
-   */
-  function isFunction(v) {
-    return v && typeof v === 'function';
-  }
-
-  /**
-   * Determines if reference `v` is a non-primitive, non-null object type; not
-   * `boolean`, `number`, `string`, `null`, or `undefined`, but any other data
-   * type that can be extended dynamically with properties and methods such as
-   * the primitive wrappers `Boolean`, `Number`, `String`, as well as built-in
-   * types like `Array`, `Date`, `Function`, `Object`, `RegExp`, and others.
-   *
-   * @param {*} v The reference to test.
-   *
-   * @return {!boolean} `true` if `v` is an object; `false` otherwise.
-   *
-   * @private
-   */
-  function isObject(v) {
-    return v && typeof v === 'object' || typeof v === 'function';
-  }
-
-  /**
-   * Determines if reference `v` is a string.
-   *
-   * @param {*} v The reference to test.
-   *
-   * @return {!boolean} `true` if `v` is a string; `false` otherwise.
-   *
-   * @private
-   */
-  function isString(v) {
-    return typeof v === 'string' || O_TO_STRING.call(v) === '[object String]';
-  }
-
-  /**
-   * Cleans up an identifier, replacing redundant forward slash delimiters,
-   * removing current directory (`.`) terms, and removing parent directory
-   * (`..`) terms along with their corresponding directory names. For example:
-   * `/foo/bar//baz/./asdf/quux/..` becomes `/foo/bar/baz/asdf`.
-   *
-   * @param {!string} id The AMD module ID to clean cup.
-   *
-   * @return {!string} The normalized module ID.
-   *
-   * @private
-   */
-  function normalize(id, opt_relativeTo) {
-    var relativeTo = reverseMap[opt_relativeTo] || opt_relativeTo;
-    var match = ABSOLUTE_PATH_RE.exec(id);
-    var protocol = match ? match[1] : '';
-    var normalized = [];
-    var terms;
-    var result;
-
-    if (RELATIVE_AMD_ID_RE.test(id) && relativeTo) {
-      terms = relativeTo.split('/').slice(0, -1).concat(id.split('/'));
-    } else if (paths) {
-      var pathsBySpecificity = Object.keys(paths).sort().reverse();
-
-      for (var x = 0, n = pathsBySpecificity.length; x < n; ++x) {
-        var path = pathsBySpecificity[x];
-
-        if (id.indexOf(path) === 0) {
-          match = ABSOLUTE_PATH_RE.exec(paths[path]);
-          protocol = match ? match[1] : '';
-          terms = (match ? match[2] : paths[path]).split('/');
-
-          if (id.length > path.length) {
-            spliceTail(terms, id.substr(path.length).split('/'));
-          }
-
-          spliceHead(terms, baseUrl.split('/'));
-          break;
-        } else {
-          path = undefined;
-        }
-      }
-    }
-
-    if (!terms) {
-      if (match) {
-        // Path is absolute.
-        terms = match[2].split('/');
-      } else {
-        // Path is relative to `baseUrl`.
-        terms = (baseUrl + '/' + id).split('/');
-      }
-    }
-
-    for (var x = 0, n = terms.length; x < n; ++x) {
-      var term = terms[x];
-
-      if (term === '.' || term === '') {
-        continue;
-      } else if (term === '..') {
-        normalized.pop();
-      } else {
-        normalized.push(term);
-      }
-    }
-
-    result = protocol + normalized.join('/');
-    reverseMap[result] = path || id;
-
-    return result;
-  }
-
-  /**
-   * Converts a dotted identifier (for example, `'some.thing'`) into the
-   * corresponding value from the global namespace.
-   *
-   * @param {!string} identifier A dotted global property name.
-   *
-   * @return {*} The corresponding value from the global namespace.
-   *
-   * @private
-   */
-  function resolve(identifier) {
-    var terms = identifier.split('.');
-    var node = global;
-
-    for (var x = 0, n = terms.length; x < n && node; ++x) {
-      node = node[terms[x]];
-    }
-
-    return node;
-  }
-
-  /**
-   * Adds the elements of array `b` to to the beginning of array `a`, modifying
-   * `a` in-place.
-   *
-   * @param {!Array.<*>} a The array to modify.
-   * @param {!Array.<*>} b The array whose values will be added to `a`.
-   *
-   * @private
-   */
-  function spliceHead(a, b) {
-    A_SPLICE.bind(a, 0, 0).apply(undefined, b);
-  }
-
-  /**
-   * Adds the elements of array `b` to to the end of array `a`, modifying `a`
-   * in-place.
-   *
-   * @param {!Array.<*>} a The array to modify.
-   * @param {!Array.<*>} b The array whose values will be added to `a`.
-   *
-   * @private
-   */
-  function spliceTail(a, b) {
-    A_SPLICE.bind(a, a.length, 0).apply(undefined, b);
-  }
-
-  // --------------------------------------------------------------------------
-  // Module Loader
-
-  /**
-   * Loads module {@code key} and executes {@code callback} when it is ready.
-   *
-   * @param {!string} key The ID of the module to load.
-   * @param {!Function} callback The function that will be executed when the
-   *     module is loaded.
-   *
-   * @private
-   */
-  function load(key, callback) {
-    if (!isFunction(callback)) {
-      throw TypeError('@param callback is not a function.');
-    }
-
-    if (cache[key]) {
-      callback(undefined, cache[key]);
-      return;
-    }
-
-    if (!loading[key]) {
-      loading[key] = true;
-      script(key + '.js', onLoad.bind(undefined, key));
-    }
-
-    (listeners[key] = listeners[key] || []).push(callback);
-  };
-
-  /**
-   * Loads the script identified by `src` and invokes `callback` after it
-   * finishes loading.
-   *
-   * @param {!string} src The URL of the script to load.
-   * @param {Function=} opt_callback Run this function after the script loads.
-   *
-   * @private
-   */
-  function script(src, opt_callback) {
-    if (opt_callback && !isFunction(opt_callback)) {
-      throw TypeError('@param opt_callback is not a function.');
-    }
-
-    var el = dom.createElement('script');
-    el.charset = 'utf-8';
-    el.async = true;
-    el.src = src;
-    el.onload = function () {
-      setTimeout(function () {
-        el.parentNode.removeChild(el);
-        el = null;
-      }, 0);
-
-      opt_callback && opt_callback();
-    }
-
-    SIBLING.parentNode.insertBefore(el, SIBLING);
-  }
-
-  /**
-   * Continues composing a module after it has been loaded.
-   *
-   * @param {!string} key The ID of the module loaded.
-   *
-   * @private
-   */
-  function onLoad(key) {
-    var module = onLoad.module;
-    delete onLoad.module;
-    delete loading[key];
-
-    if (module) {
-      module.id = module.id || key;
-    } else {
-      module = new Module(key);
-    }
-
-    cache[key] = module;
-    module.actuate();
-
-    var callbacks = listeners[key];
-    if (callbacks) {
-      while (callbacks.length) {
-        setTimeout((function (f) {
-          f(undefined, module);
-        })(callbacks.shift()), 0);
-      }
-    }
-  };
-
   // --------------------------------------------------------------------------
   // Module
 
   /**
-   * An AMD module or alien script.
+   * An AMD module, plain old script, or other resource loaded via the AMD API.
    *
    * @param {string=} id A valid AMD module ID.
    * @param {Array.<string>=} dependencies A list of valid AMD module IDs on
@@ -641,7 +366,7 @@
   var P = Module.prototype;
 
   /**
-   * Loads this module’s dependencies.
+   * Normalizes and loads this module’s dependencies.
    */
   P.actuate = function actuate() {
     var dependencies = this.dependencies;
@@ -654,30 +379,28 @@
         if (COMMON_JS_DEPENDENCIES.indexOf(dependency) > -1) {
           setTimeout(makeCommonJsDependency.bind(this, dependency), 0);
         } else {
-          this.shim(dependency);
+          this.load(dependency);
         }
       }
     } else {
-      setTimeout(this.define.bind(this), 0);
+      setTimeout(this.define.bind(this, 'actuate'), 0);
     }
   };
 
   /**
-   * Creates a shim for `dependency`, if necessary, then loads it.
+   * Loads `dependency`; if necessary, after creating a shim for it.
    *
    * @param {!string} dependency The ID of the module to load.
    */
-  P.shim = function shimDependency(dependency) {
+  P.load = function loadDependency(dependency) {
     var dependencies = [];
     var adapter = shim && (shim[dependency] || shim[reverseMap[dependency]]);
 
     if (adapter) {
       if (isArray(adapter)) {
         spliceTail(dependencies, adapter);
-      } else {
-        if (adapter.deps) {
-          spliceTail(dependencies, adapter.deps);
-        }
+      } else if (adapter.deps) {
+        spliceTail(dependencies, adapter.deps);
       }
     }
 
@@ -778,7 +501,7 @@
       }
     }
 
-    return true;
+    return dependencies.length > 0;
   };
 
   /**
@@ -794,13 +517,15 @@
     var unmetDependency;
 
     for (var x = 0, n = dependencies.length; x < n; ++x) {
-      if (module.id === dependencies[x]) {
+      var dependency = dependencies[x];
+
+      if (module.id === dependency || module.id === reverseMap[dependency]) {
         modules[x] = module;
       }
 
       if (!modules[x]) {
         ++unmet;
-        unmetDependency = cache[dependencies[x]];
+        unmetDependency = cache[dependency];
       }
     }
 
@@ -843,13 +568,285 @@
       this.exports = resolve(adapter.exports);
     }
 
-    this.isBlockedBy = function isBlockedBy() { return false; };
+    this.actuate = this.isBlockedBy = this.define = NOOP;
     this.defined = true;
 
     while (callbacks.length) {
       callbacks.pop()(this); // LIFO is important.
     }
   };
+
+  // --------------------------------------------------------------------------
+  // Module Loader
+
+  /**
+   * Loads module `id` and executes `callback` when it is ready.
+   *
+   * @param {!string} id The identifier of the module to load.
+   * @param {!Function} callback The function that will be executed when the
+   *     module is loaded.
+   *
+   * @private
+   */
+  function load(id, callback) {
+    if (!isFunction(callback)) {
+      throw TypeError('@param callback is not a function.');
+    }
+
+    if (cache[id]) {
+      callback(undefined, cache[id]);
+      return;
+    }
+
+    if (!loading[id]) {
+      loading[id] = true;
+      script(id + '.js', onLoad.bind(undefined, id));
+    }
+
+    (listeners[id] = listeners[id] || []).push(callback);
+  };
+
+  /**
+   * Loads the script identified by `src` and invokes `callback` after it
+   * finishes loading.
+   *
+   * @param {!string} src The URL of the script to load.
+   * @param {Function=} opt_callback Run this function after the script loads.
+   *
+   * @private
+   */
+  function script(src, opt_callback) {
+    if (opt_callback && !isFunction(opt_callback)) {
+      throw TypeError('@param opt_callback is not a function.');
+    }
+
+    var el = dom.createElement('script');
+    el.charset = 'utf-8';
+    el.async = true;
+    el.src = src;
+    el.onload = function () {
+      setTimeout(function () {
+        el.parentNode.removeChild(el);
+        el = null;
+      }, 0);
+
+      opt_callback && opt_callback();
+    }
+
+    SIBLING.parentNode.insertBefore(el, SIBLING);
+  }
+
+  /**
+   * Continues composing a module after it has been loaded.
+   *
+   * @param {!string} id The identifier of the module loaded.
+   *
+   * @private
+   */
+  function onLoad(id) {
+    var module = onLoad.module;
+    delete onLoad.module;
+    delete loading[id];
+
+    if (module) {
+      module.id = module.id || id;
+    } else {
+      module = new Module(id);
+    }
+
+    cache[module.id] = module;
+    module.actuate();
+
+    var callbacks = listeners[id];
+    if (callbacks) {
+      while (callbacks.length) {
+        setTimeout((function (f) {
+          f(undefined, module);
+        })(callbacks.shift()), 0);
+      }
+
+      delete listeners[id];
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Minimal Utilities
+
+  /**
+   * Determines if reference `v` is an array.
+   *
+   * @param {*} v The reference to test.
+   *
+   * @return {!boolean} `true` if `v` is an array; `false` otherwise.
+   *
+   * @private
+   */
+  function isArray(v) {
+    return v && O_TO_STRING.call(v) === '[object Array]';
+  }
+
+  /**
+   * Determines if reference `v` is a function.
+   *
+   * @param {*} v The reference to test.
+   *
+   * @return {!boolean} `true` if `v` is a function; `false` otherwise.
+   *
+   * @private
+   */
+  function isFunction(v) {
+    return v && typeof v === 'function';
+  }
+
+  /**
+   * Determines if reference `v` is a non-primitive, non-null object type; not
+   * `boolean`, `number`, `string`, `null`, or `undefined`, but any other data
+   * type that can be extended dynamically with properties and methods such as
+   * the primitive wrappers `Boolean`, `Number`, `String`, as well as built-in
+   * types like `Array`, `Date`, `Function`, `Object`, `RegExp`, and others.
+   *
+   * @param {*} v The reference to test.
+   *
+   * @return {!boolean} `true` if `v` is an object; `false` otherwise.
+   *
+   * @private
+   */
+  function isObject(v) {
+    return v && typeof v === 'object' || typeof v === 'function';
+  }
+
+  /**
+   * Determines if reference `v` is a string.
+   *
+   * @param {*} v The reference to test.
+   *
+   * @return {!boolean} `true` if `v` is a string; `false` otherwise.
+   *
+   * @private
+   */
+  function isString(v) {
+    return typeof v === 'string' || O_TO_STRING.call(v) === '[object String]';
+  }
+
+  /**
+   * Cleans up an identifier, replacing redundant forward slash delimiters,
+   * removing current directory (`.`) terms, and removing parent directory
+   * (`..`) terms along with their corresponding directory names. For example:
+   * `/foo/bar//baz/./asdf/quux/..` becomes `/foo/bar/baz/asdf`.
+   *
+   * @param {!string} id The AMD module ID to clean cup.
+   *
+   * @return {!string} The normalized module ID.
+   *
+   * @private
+   */
+  function normalize(id, opt_relativeTo) {
+    var relativeTo = reverseMap[opt_relativeTo] || opt_relativeTo;
+    var match = ABSOLUTE_PATH_RE.exec(id);
+    var protocol = match ? match[1] : '';
+    var normalized = [];
+    var terms;
+    var result;
+
+    if (RELATIVE_PATH_RE.test(id) && relativeTo) {
+      terms = relativeTo.split('/').slice(0, -1).concat(id.split('/'));
+    } else if (paths) {
+      var pathsBySpecificity = Object.keys(paths).sort().reverse();
+
+      for (var x = 0, n = pathsBySpecificity.length; x < n; ++x) {
+        var path = pathsBySpecificity[x];
+
+        if (id.indexOf(path) === 0) {
+          match = ABSOLUTE_PATH_RE.exec(paths[path]);
+          protocol = match ? match[1] : '';
+          terms = (match ? match[2] : paths[path]).split('/');
+
+          if (id.length > path.length) {
+            spliceTail(terms, id.substr(path.length).split('/'));
+          }
+
+          spliceHead(terms, baseUrl.split('/'));
+          break;
+        } else {
+          path = undefined;
+        }
+      }
+    }
+
+    if (!terms) {
+      if (match) {
+        // Path is absolute.
+        terms = match[2].split('/');
+      } else {
+        // Path is relative to `baseUrl`.
+        terms = (baseUrl + '/' + id).split('/');
+      }
+    }
+
+    for (var x = 0, n = terms.length; x < n; ++x) {
+      var term = terms[x];
+
+      if (term === '.' || term === '') {
+        continue;
+      } else if (term === '..') {
+        normalized.pop();
+      } else {
+        normalized.push(term);
+      }
+    }
+
+    result = protocol + normalized.join('/');
+    reverseMap[result] = path || id;
+
+    return result;
+  }
+
+  /**
+   * Converts a dotted identifier (for example, `'some.thing'`) into the
+   * corresponding value from the global namespace.
+   *
+   * @param {!string} identifier A dotted global property name.
+   *
+   * @return {*} The corresponding value from the global namespace.
+   *
+   * @private
+   */
+  function resolve(identifier) {
+    var terms = identifier.split('.');
+    var node = global;
+
+    for (var x = 0, n = terms.length; x < n && node; ++x) {
+      node = node[terms[x]];
+    }
+
+    return node;
+  }
+
+  /**
+   * Adds the elements of array `b` to to the beginning of array `a`, modifying
+   * `a` in-place.
+   *
+   * @param {!Array.<*>} a The array to modify.
+   * @param {!Array.<*>} b The array whose values will be added to `a`.
+   *
+   * @private
+   */
+  function spliceHead(a, b) {
+    A_SPLICE.bind(a, 0, 0).apply(undefined, b);
+  }
+
+  /**
+   * Adds the elements of array `b` to to the end of array `a`, modifying `a`
+   * in-place.
+   *
+   * @param {!Array.<*>} a The array to modify.
+   * @param {!Array.<*>} b The array whose values will be added to `a`.
+   *
+   * @private
+   */
+  function spliceTail(a, b) {
+    A_SPLICE.bind(a, a.length, 0).apply(undefined, b);
+  }
 
   // --------------------------------------------------------------------------
   // Exports
