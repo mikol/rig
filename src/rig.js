@@ -729,10 +729,10 @@
   }
 
   /**
-   * Cleans up an identifier, replacing redundant forward slash delimiters,
-   * removing current directory (`.`) terms, and removing parent directory
-   * (`..`) terms along with their corresponding directory names. For example:
-   * `/foo/bar//baz/./asdf/quux/..` becomes `/foo/bar/baz/asdf`.
+   * Cleans up an identifier, removing redundant forward slash delimiters,
+   * current directory (`'.'`) indirections, and removing parent directory
+   * (`'..'`) indirections along with their corresponding directory names. For
+   * example: `'/foo/bar//baz/./asdf/quux/..'` becomes `'/foo/bar/baz/asdf'`.
    *
    * @param {!string} id The AMD module ID to clean cup.
    *
@@ -744,44 +744,68 @@
     var relativeTo = reverseMap[opt_relativeTo] || opt_relativeTo;
     var match = ABSOLUTE_PATH_RE.exec(id);
     var protocol = match ? match[1] : '';
-    var normalized = [];
+    var result = id;
     var terms;
-    var result;
 
     if (RELATIVE_PATH_RE.test(id) && relativeTo) {
+      // Resolve an ID relative to another module before checking paths config.
       terms = relativeTo.split('/').slice(0, -1).concat(id.split('/'));
-    } else if (paths) {
+      result = normalizeTerms(terms).join('/');
+    }
+
+    if (paths) {
       var pathsBySpecificity = Object.keys(paths).sort().reverse();
 
       for (var x = 0, n = pathsBySpecificity.length; x < n; ++x) {
         var path = pathsBySpecificity[x];
 
-        if (id.indexOf(path) === 0) {
+        if (result.indexOf(path) === 0) {
           match = ABSOLUTE_PATH_RE.exec(paths[path]);
           protocol = match ? match[1] : '';
           terms = (match ? match[2] : paths[path]).split('/');
 
-          if (id.length > path.length) {
-            spliceTail(terms, id.substr(path.length).split('/'));
+          if (result.length > path.length) {
+            spliceTail(terms, result.substr(path.length).split('/'));
           }
 
           spliceHead(terms, baseUrl.split('/'));
           break;
-        } else {
-          path = undefined;
         }
       }
     }
 
     if (!terms) {
+      // `id` is not relative to a module and does not match any paths config.
       if (match) {
-        // Path is absolute.
+        // `id` is absolute.
         terms = match[2].split('/');
       } else {
-        // Path is relative to `baseUrl`.
-        terms = (baseUrl + '/' + id).split('/');
+        // `id` is relative to `baseUrl`.
+        terms = (baseUrl + '/' + result).split('/');
       }
     }
+
+    result = protocol + normalizeTerms(terms).join('/');
+    reverseMap[result] = id;
+
+    return result;
+  }
+
+  /**
+   * Cleans up a list of identifier terms, removing empty terms (`''`), current
+   * directory (`'.'`) indirections, and parent directory (`'..'`) indirections
+   * along with their corresponding directory names. For example:
+   * `['foo', 'bar', '', 'baz', '.', 'asdf', 'quux', '..']` becomes
+   * `['foo', 'bar', 'baz', 'asdf']`.
+   *
+   * @param {Array.<string>} terms A list of identifiers and path indirections
+   *     ('.' or '..').
+   *
+   * @return {Array.<string>} The remaining identifiers after interoplating any
+   *     '.' or '..' indirections and removing any empty terms.
+   */
+  function normalizeTerms(terms) {
+    var normalized = [];
 
     for (var x = 0, n = terms.length; x < n; ++x) {
       var term = terms[x];
@@ -795,10 +819,7 @@
       }
     }
 
-    result = protocol + normalized.join('/');
-    reverseMap[result] = path || id;
-
-    return result;
+    return normalized;
   }
 
   /**
