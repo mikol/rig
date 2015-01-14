@@ -4,7 +4,88 @@
  * See http://creativecommons.org/licenses/by/4.0/ for details.
  */
 
-(function (global, dom, TypeError, undefined) {
+(function (global, TypeError, undefined) {
+  /* > rig:runtime */
+  // --------------------------------------------------------------------------
+  // Stock Loader Implementation
+
+  /**
+   * The entry point into the web page’s document object model.
+   *
+   * @type {HTMLDocument}
+   * @private
+   */
+  var dom = document;
+  
+  /**
+   * The first <script> element in a browser context, before which module
+   * <script> elements will be inserted to load their source code.
+   *
+   * @type {HTMLScriptElement}
+   * @private
+   */
+  var sibling = dom.getElementsByTagName('script')[0];
+ 
+  /**
+   * Loads module `id` and executes `callback` when it is ready.
+   *
+   * @param {!string} id The normalized identifier of the module to load.
+   * @param {!Function} callback The function that will be executed when the
+   *     module is loaded.
+   *
+   * @private
+   */
+  function loader(id, opt_callback) {
+    var el = dom.createElement('script');
+    el.charset = 'utf-8';
+    el.async = true;
+    el.src = id + '.js';
+    el.onload = function () {
+      setTimeout(function () {
+        el.parentNode.removeChild(el);
+        el = null;
+      }, 0);
+ 
+      opt_callback && opt_callback();
+    }
+ 
+    sibling.parentNode.insertBefore(el, sibling);
+  };
+
+  // --------------------------------------------------------------------------
+  // Stock Publish Implementation
+
+  /**
+   * Exports the AMD API to the global scope and bootstraps the `data-main`
+   * script, if any. 
+   *
+   * When specified, the `data-main` script loads asynchronously. This is only
+   * intended to be used when the page has exactly one entry point. There is
+   * no guarantee that the `data-main` script will finish executing before
+   * later scripts in the same page are loaded and executed.
+   *
+   * @param {!Function} require The AMD module loading function to export.
+   * @param {!Function} define The AMD module defining function to export.
+   *
+   * @private
+   */
+  function publish(require, define) {
+    global.define = define;
+    global.require = require;
+    
+    var els = dom.getElementsByTagName('script');
+    for (var x = 0, n = els.length, el; x < n && (el = els[x]); ++x) {
+      if (el.hasAttribute('data-main')) {
+        script(el.getAttribute('data-main'));
+        break;
+      }
+    }
+  }
+  /* < rig:runtime */
+  // --------------------------------------------------------------------------
+  // Core AMD Implementation
+
+(function () {
   // --------------------------------------------------------------------------
   // Local Constants
 
@@ -22,7 +103,7 @@
    * @type {Function}
    * @private
    */
-  var A_SPLICE = Array.prototype.splice;
+  var SPLICE = Array.prototype.splice;
 
   /**
    * Matches JavaScript end-of-line and block comments.
@@ -41,20 +122,12 @@
   var COMMON_JS_DEPENDENCIES = [ 'require', 'exports', 'module' ];
 
   /**
-   * A method that does nothing.
-   *
-   * @type {Function}
-   * @private
-   */
-  var NOOP = function () {};
-
-  /**
    * A shorcut for calling the `Object.prototype.toString` method.
    *
    * @type {Function}
    * @private
    */
-  var O_TO_STRING = Object.prototype.toString;
+  var TO_STRING = Object.prototype.toString;
 
   /**
    * Matches relative AMD module IDs.
@@ -71,15 +144,6 @@
    * @private
    */
   var REQUIRE_RE = /[^.]\s*require\s*?\(\s*(['"])(.*?[^\\])(?:\1)\s*\)*/g;
-
-  /**
-   * The first <script> element in a browser context, before which module
-   * <script> elements will be inserted to load their source code.
-   *
-   * @type {HTMLScriptElement}
-   * @private
-   */
-  var SIBLING = dom.getElementsByTagName('script')[0];
 
   // --------------------------------------------------------------------------
   // Local Variables
@@ -154,11 +218,11 @@
   //
   // (1) A module is requested -- for example, via `require(['module'], ...)`.
   // (2) The module is loaded via `load('module', ...)`.
-  // (3) The script source for the module is loaded by inserting a <script>
-  //     element into the DOM.
-  // (4) The module’s `define()` call is executed, producing a list of depend-
-  //     encies and a method that, when called, will set up the module’s in-
-  //     ternals and export its public API.
+  // (3) The script source for the module is loaded -- for example, by
+  //     inserting a <script> element into the DOM.
+  // (4) The module’s `define()` call is executed, producing a list of
+  //     dependencies and a method that, when called, will set up the module’s
+  //     internals and export its public API.
   //
   // Note: At this point, we often do not know what the module’s ID is. Modules
   // are loaded asynchronously so the order in which each module’s `define()`
@@ -369,21 +433,26 @@
    * Normalizes and loads this module’s dependencies.
    */
   P.actuate = function actuate() {
+    if (this.defined) {
+      return;
+    }
+
     var dependencies = this.dependencies;
     var n = dependencies.length;
 
     if (n) {
       for (var x = 0; x < n; ++x) {
-        var dependency = dependencies[x] = normalize(dependencies[x], this.id);
-
+        var dependency = dependencies[x];
+        
         if (COMMON_JS_DEPENDENCIES.indexOf(dependency) > -1) {
           setTimeout(makeCommonJsDependency.bind(this, dependency), 0);
         } else {
+          dependency = dependencies[x] = normalize(dependencies[x], this.id);
           this.load(dependency);
         }
       }
     } else {
-      setTimeout(this.define.bind(this, 'actuate'), 0);
+      setTimeout(tie(P.define, this), 0);
     }
   };
 
@@ -407,11 +476,11 @@
     if (dependencies.length) {
       var module = new Module(dependency, dependencies);
       module.shimmed = dependency;
-      module.addDefineListener(this.removeDependency.bind(this));
+      module.addDefineListener(tie(P.removeDependency, this));
       cache[dependency] = module;
       module.actuate();
     } else {
-      load(dependency, onDependencyLoaded.bind(this));
+      load(dependency, tie(onDependencyLoaded, this));
     }
   };
 
@@ -429,6 +498,7 @@
     };
 
     if (dependency === 'require') {
+      // XXX: tie() does not work in these cases.
       output = require.bind(this);
       output.toUrl = require.toUrl.bind(this);
     } else if (dependency === 'exports') {
@@ -455,7 +525,7 @@
     if (error) {
       console.error('Failed to load dependency.', error);
     } else {
-      module.addDefineListener(this.removeDependency.bind(this));
+      module.addDefineListener(tie(P.removeDependency, this));
     }
   };
 
@@ -488,6 +558,10 @@
    *     `module`; `false` if this module has other unmet dependencies.
    */
   P.isBlockedBy = function isBlockedBy(module) {
+    if (this.defined) {
+      return false;
+    }
+
     var dependencies = this.dependencies;
     var modules = this.modules;
 
@@ -532,7 +606,7 @@
     if (unmet === 0) {
       if (this.shimmed) {
         if (this.shimmed === this.id) {
-          script(this.shimmed + '.js', this.define.bind(this));
+          loader(this.shimmed, tie(P.define, this));
           this.shimmed = true;
         }
       } else {
@@ -550,8 +624,13 @@
    * that this module is ready to be used.
    */
   P.define = function define() {
+    if (this.defined) {
+      return;
+    }
+
     var adapter = shim && shim[this.id];
     var factory = adapter && adapter.init ? adapter.init : this.factory;
+    var dependencies = this.dependencies;
     var modules = this.modules;
     var callbacks = this.listeners;
     var argc = modules.length;
@@ -568,12 +647,21 @@
       this.exports = resolve(adapter.exports);
     }
 
-    this.actuate = this.isBlockedBy = this.define = NOOP;
+    // this.actuate = this.isBlockedBy = this.define = NOOP;
     this.defined = true;
 
     while (callbacks.length) {
       callbacks.pop()(this); // LIFO is important.
     }
+    
+    setTimeout(function () {
+      while (dependencies.length) {
+        dependencies.pop();
+      }
+      while (modules.length) {
+        modules.pop();
+      }
+    }, 100);
   };
 
   // --------------------------------------------------------------------------
@@ -592,49 +680,19 @@
     if (!isFunction(callback)) {
       throw TypeError('@param callback is not a function.');
     }
-
+ 
     if (cache[id]) {
       callback(undefined, cache[id]);
       return;
     }
-
+ 
     if (!loading[id]) {
       loading[id] = true;
-      script(id + '.js', onLoad.bind(undefined, id));
+      loader(id, onLoad.bind(undefined, id));
     }
-
+ 
     (listeners[id] = listeners[id] || []).push(callback);
   };
-
-  /**
-   * Loads the script identified by `src` and invokes `callback` after it
-   * finishes loading.
-   *
-   * @param {!string} src The URL of the script to load.
-   * @param {Function=} opt_callback Run this function after the script loads.
-   *
-   * @private
-   */
-  function script(src, opt_callback) {
-    if (opt_callback && !isFunction(opt_callback)) {
-      throw TypeError('@param opt_callback is not a function.');
-    }
-
-    var el = dom.createElement('script');
-    el.charset = 'utf-8';
-    el.async = true;
-    el.src = src;
-    el.onload = function () {
-      setTimeout(function () {
-        el.parentNode.removeChild(el);
-        el = null;
-      }, 0);
-
-      opt_callback && opt_callback();
-    }
-
-    SIBLING.parentNode.insertBefore(el, SIBLING);
-  }
 
   /**
    * Continues composing a module after it has been loaded.
@@ -645,7 +703,7 @@
    */
   function onLoad(id) {
     var module = onLoad.module;
-    delete onLoad.module;
+    onLoad.module = null;
     delete loading[id];
 
     if (module) {
@@ -682,7 +740,7 @@
    * @private
    */
   function isArray(v) {
-    return v && O_TO_STRING.call(v) === '[object Array]';
+    return v && TO_STRING.call(v) === '[object Array]';
   }
 
   /**
@@ -725,7 +783,7 @@
    * @private
    */
   function isString(v) {
-    return typeof v === 'string' || O_TO_STRING.call(v) === '[object String]';
+    return typeof v === 'string' || TO_STRING.call(v) === '[object String]';
   }
 
   /**
@@ -786,7 +844,10 @@
     }
 
     result = protocol + normalizeTerms(terms).join('/');
-    reverseMap[result] = id;
+
+    if (result !== id) {
+      reverseMap[result] = id;
+    }
 
     return result;
   }
@@ -853,7 +914,7 @@
    * @private
    */
   function spliceHead(a, b) {
-    A_SPLICE.bind(a, 0, 0).apply(undefined, b);
+    SPLICE.bind(a, 0, 0).apply(undefined, b);
   }
 
   /**
@@ -866,29 +927,28 @@
    * @private
    */
   function spliceTail(a, b) {
-    A_SPLICE.bind(a, a.length, 0).apply(undefined, b);
+    SPLICE.bind(a, a.length, 0).apply(undefined, b);
   }
 
-  // --------------------------------------------------------------------------
-  // Exports
+  /**
+   * Creates a new function that wraps `fn` and, when called, has its `this`
+   * keyword set to the provided `context`.
+   *
+   * @param {!Function} fn The function to wrap.
+   * @param {*} context The value to use as the `this` keyword when executing
+   *     the wrapped function.
+   *
+   * @return {!Function} The new function.
+   *
+   * @private
+   */
+  function tie(fn, context) {
+    return function () {
+      fn.apply(context, SPLICE.call(arguments, 0));
+    };
+  }
+  
+  publish(require, define);
+})();
 
-  global.define = define;
-  global.require = require;
-
-  // --------------------------------------------------------------------------
-  // Bootstrapping
-
-  // Looks for a data-main attribute and loads the specified script asynchron-
-  // ously. This is only intended to be used when the page has exactly one en-
-  // try point. There is no guarantee that the data-main script will finish
-  // executing before later scripts in the same page are loaded and executed.
-  (function () {
-    var els = dom.getElementsByTagName('script');
-    for (var x = 0, n = els.length, el; x < n && (el = els[x]); ++x) {
-      if (el.hasAttribute('data-main')) {
-        script(el.getAttribute('data-main'));
-        break;
-      }
-    }
-  })();
-})(this, document, TypeError);
+})(this, TypeError);
