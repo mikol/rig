@@ -19,10 +19,14 @@ define(function () {
    * @return {!Function} {@code subtype} after it has been subjoined with the
    *     {@code opt_supertype} prototype chain.
    *
-   * @private
+   * @public
    */
-  return function subjoin(subtype, opt_supertype) {
-    opt_supertype = opt_supertype || Object;
+  return function subjoin(opt_supertype, subtype) {
+    if (arguments.length === 1) {
+      subtype = opt_supertype;
+      opt_supertype = Object;
+    }
+
     PrototypalIntermediate.prototype = opt_supertype.prototype;
     subtype.prototype = new PrototypalIntermediate();
     subtype.supertype = opt_supertype;
