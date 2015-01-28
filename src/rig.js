@@ -5,9 +5,17 @@
  */
 
 (function (global, TypeError, undefined) {
-  /* > rig:runtime */
   // --------------------------------------------------------------------------
-  // Stock Loader Implementation
+  // DOM Runtime Implementation
+
+  /**
+   * The directory from which unqualified (i.e., top-level and relative) module
+   * IDs will be resolved.
+   *
+   * @type {string}
+   * @private
+   */
+  var wd = location.href.split('/').slice(0, -1).join('/');
 
   /**
    * The entry point into the web page’s document object model.
@@ -16,7 +24,7 @@
    * @private
    */
   var dom = document;
-  
+
   /**
    * The first <script> element in a browser context, before which module
    * <script> elements will be inserted to load their source code.
@@ -25,39 +33,39 @@
    * @private
    */
   var sibling = dom.getElementsByTagName('script')[0];
- 
+
   /**
    * Loads module `id` and executes `callback` when it is ready.
    *
    * @param {!string} id The normalized identifier of the module to load.
-   * @param {!Function} callback The function that will be executed when the
-   *     module is loaded.
+   * @param {string=} opt_fallbackId The unmodified identifier.
+   * @param {Function=} opt_callback The function that will be executed when
+   *     the module is loaded.
    *
    * @private
    */
-  function loader(id, opt_callback) {
+  function loader(ids, opt_callback) {
     var el = dom.createElement('script');
+    var url = ids.fqid + (ids.fqid.match(/\.js$/) ? '' : '.js');
+    
     el.charset = 'utf-8';
     el.async = true;
-    el.src = id + '.js';
+    el.src = url;
     el.onload = function () {
       setTimeout(function () {
         el.parentNode.removeChild(el);
         el = null;
       }, 0);
- 
-      opt_callback && opt_callback();
+
+      opt_callback && opt_callback(ids.normalized);
     }
- 
+
     sibling.parentNode.insertBefore(el, sibling);
   };
 
-  // --------------------------------------------------------------------------
-  // Stock Publish Implementation
-
   /**
    * Exports the AMD API to the global scope and bootstraps the `data-main`
-   * script, if any. 
+   * script, if any.
    *
    * When specified, the `data-main` script loads asynchronously. This is only
    * intended to be used when the page has exactly one entry point. There is
@@ -72,18 +80,15 @@
   function publish(require, define) {
     global.define = define;
     global.require = require;
-    
+
     var els = dom.getElementsByTagName('script');
     for (var x = 0, n = els.length, el; x < n && (el = els[x]); ++x) {
       if (el.hasAttribute('data-main')) {
-        script(el.getAttribute('data-main'));
+        loader(el.getAttribute('data-main'));
         break;
       }
     }
   }
-  /* < rig:runtime */
-  // --------------------------------------------------------------------------
-  // Core AMD Implementation
 
 (function () {
   // --------------------------------------------------------------------------
@@ -149,20 +154,21 @@
   // Local Variables
 
   /**
+   * A map from module IDs aliased via the `paths` Common Config variable to
+   * their corresponding normalized module IDs.
+   *
+   * @type {Object.<string, string>}
+   * @private
+   */
+  var aliases = {};
+
+  /**
    * Modules indexed herein have at least been partially defined.
    *
    * @type {Object.<string, *>}
    * @private
    */
   var cache = {};
-
-  /**
-   * Modules indexed herein are being loaded.
-   *
-   * @type {Object.<string, *>}
-   * @private
-   */
-  var loading = {};
 
   /**
    * Modules indexed herein have handlers waiting for the module to load
@@ -173,14 +179,13 @@
    */
   var listeners = {};
 
- /**
-  * IDs indexed herein have been normalized; use this index to convert between
-  * a normalized ID and an original, unaltered ID.
-  *
-  * @type {Object.<string, string>}
-  * @private
-  */
-  var reverseMap = {};
+  /**
+   * Modules indexed herein are being loaded.
+   *
+   * @type {Object.<string, *>}
+   * @private
+   */
+  var loading = {};
 
   // --------------------------------------------------------------------------
   // Common Config Variables
@@ -334,7 +339,7 @@
 
     var module = new Module(opt_id, dependencies, fn);
 
-    if (opt_id && !loading[normalize(opt_id)]) {
+    if (opt_id && !loading[opt_id]) {
       setTimeout(function () {
         cache[opt_id] = module;
         module.actuate();
@@ -368,7 +373,7 @@
     if (isArray(dependencies) && isFunction(opt_callback)) {
       new Module(undefined, dependencies, opt_callback).actuate();
     } else if (isString(dependencies)) {
-      var module = cache[normalize(dependencies, this.id)];
+      var module = cache[alias(dependencies, dirname(this.id))];
       return module.exports;
     } else {
       throw TypeError('require() called with invalid arguments.');
@@ -400,12 +405,12 @@
    * @public
    */
   require.toUrl = function (resourceId) {
-    return normalize(resourceId, this.id);
+    return alias(resourceId, dirname(this.id));
   };
 
   // --------------------------------------------------------------------------
   // Module
-
+  
   /**
    * An AMD module, plain old script, or other resource loaded via the AMD API.
    *
@@ -443,11 +448,12 @@
     if (n) {
       for (var x = 0; x < n; ++x) {
         var dependency = dependencies[x];
-        
+
         if (COMMON_JS_DEPENDENCIES.indexOf(dependency) > -1) {
           setTimeout(makeCommonJsDependency.bind(this, dependency), 0);
         } else {
-          dependency = dependencies[x] = normalize(dependencies[x], this.id);
+          dependency = dependencies[x] =
+            alias(dependencies[x], dirname(this.id));
           this.load(dependency);
         }
       }
@@ -463,7 +469,7 @@
    */
   P.load = function loadDependency(dependency) {
     var dependencies = [];
-    var adapter = shim && (shim[dependency] || shim[reverseMap[dependency]]);
+    var adapter = shim && shim[dependency];
 
     if (adapter) {
       if (isArray(adapter)) {
@@ -480,7 +486,8 @@
       cache[dependency] = module;
       module.actuate();
     } else {
-      load(dependency, tie(onDependencyLoaded, this));
+      var ids = { fqid: fqid(dependency), normalized: dependency };
+      load(ids, tie(onDependencyLoaded, this));
     }
   };
 
@@ -593,7 +600,7 @@
     for (var x = 0, n = dependencies.length; x < n; ++x) {
       var dependency = dependencies[x];
 
-      if (module.id === dependency || module.id === reverseMap[dependency]) {
+      if (module.id === dependency) {
         modules[x] = module;
       }
 
@@ -606,7 +613,8 @@
     if (unmet === 0) {
       if (this.shimmed) {
         if (this.shimmed === this.id) {
-          loader(this.shimmed, tie(P.define, this));
+          var ids = { fqid: fqid(this.id), normalized: this.id };
+          loader(ids, tie(P.define, this));
           this.shimmed = true;
         }
       } else {
@@ -653,7 +661,7 @@
     while (callbacks.length) {
       callbacks.pop()(this); // LIFO is important.
     }
-    
+
     setTimeout(function () {
       while (dependencies.length) {
         dependencies.pop();
@@ -676,38 +684,47 @@
    *
    * @private
    */
-  function load(id, callback) {
+  function load(ids, callback) {
     if (!isFunction(callback)) {
       throw TypeError('@param callback is not a function.');
     }
- 
-    if (cache[id]) {
-      callback(undefined, cache[id]);
+
+    var normalized = ids.normalized;
+
+    if (cache[normalized]) {
+      callback(undefined, cache[normalized]);
       return;
     }
- 
-    if (!loading[id]) {
-      loading[id] = true;
-      loader(id, onLoad.bind(undefined, id));
+
+    if (!loading[normalized]) {
+      loading[normalized] = true;
+      loader(ids, onLoad);
     }
- 
-    (listeners[id] = listeners[id] || []).push(callback);
+
+    (listeners[normalized] = listeners[normalized] || []).push(callback);
   };
 
   /**
    * Continues composing a module after it has been loaded.
    *
    * @param {!string} id The identifier of the module loaded.
+   * @param {string=} opt_id The original identifier if it could not be used to
+   *     load the module.
+   * @param {Object=} opt_exports The exported interface of the module loaded.
    *
    * @private
    */
-  function onLoad(id) {
+  function onLoad(id, opt_exports) {
     var module = onLoad.module;
     onLoad.module = null;
     delete loading[id];
 
     if (module) {
       module.id = module.id || id;
+    } else if (opt_exports) {
+      module = new Module(id, COMMON_JS_DEPENDENCIES, function () {
+        return opt_exports;
+      });
     } else {
       module = new Module(id);
     }
@@ -725,9 +742,9 @@
 
       delete listeners[id];
     }
-  };
+  }
 
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // Minimal Utilities
 
   /**
@@ -787,69 +804,131 @@
   }
 
   /**
-   * Cleans up an identifier, removing redundant forward slash delimiters,
-   * current directory (`'.'`) indirections, and removing parent directory
-   * (`'..'`) indirections along with their corresponding directory names. For
-   * example: `'/foo/bar//baz/./asdf/quux/..'` becomes `'/foo/bar/baz/asdf'`.
+   * Looks up `id` in the `paths` Common Config variable, producing the
+   * corresponding canonical (that is, top-level or absolute) identifier; if
+   * `id` is not an alias in `paths`, then it’s canonical form will be
+   * produced as if `normalize(id, opt_relativeTo)` were called directly.
    *
-   * @param {!string} id The AMD module ID to clean cup.
+   * @param {!string} id The AMD module ID to look up.
+   * @param {string=} opt_relativeTo The pathname from which a relative module
+   *     ID (that is, whose first term is `'.'` or `'..'`) should be resolved.
    *
-   * @return {!string} The normalized module ID.
+   * @return {!string} A canonical (that is, top-level or absolute) module
+   *     identifier.
+   * 
+   * @see #normalize
    *
    * @private
    */
-  function normalize(id, opt_relativeTo) {
-    var relativeTo = reverseMap[opt_relativeTo] || opt_relativeTo;
-    var match = ABSOLUTE_PATH_RE.exec(id);
-    var protocol = match ? match[1] : '';
-    var result = id;
-    var terms;
-
-    if (RELATIVE_PATH_RE.test(id) && relativeTo) {
-      // Resolve an ID relative to another module before checking paths config.
-      terms = relativeTo.split('/').slice(0, -1).concat(id.split('/'));
-      result = normalizeTerms(terms).join('/');
-    }
-
+  function alias(id, opt_relativeTo) {
     if (paths) {
       var pathsBySpecificity = Object.keys(paths).sort().reverse();
 
       for (var x = 0, n = pathsBySpecificity.length; x < n; ++x) {
-        var path = pathsBySpecificity[x];
+        var p = pathsBySpecificity[x];
 
-        if (result.indexOf(path) === 0) {
-          match = ABSOLUTE_PATH_RE.exec(paths[path]);
-          protocol = match ? match[1] : '';
-          terms = (match ? match[2] : paths[path]).split('/');
+        if (id.indexOf(p) === 0) {
+          var match = ABSOLUTE_PATH_RE.exec(paths[p]);
+          var protocol = match ? match[1] : '';
+          var terms = (match ? match[2] : paths[p]).split('/');
 
-          if (result.length > path.length) {
-            spliceTail(terms, result.substr(path.length).split('/'));
+          if (id.length > p.length) {
+            spliceTail(terms, id.substr(p.length).split('/'));
           }
 
-          spliceHead(terms, baseUrl.split('/'));
-          break;
+          var result = normalize(terms.join('/'));
+          aliases[result] = id;
+          
+          return result;
         }
       }
     }
 
-    if (!terms) {
-      // `id` is not relative to a module and does not match any paths config.
-      if (match) {
-        // `id` is absolute.
-        terms = match[2].split('/');
-      } else {
-        // `id` is relative to `baseUrl`.
-        terms = (baseUrl + '/' + result).split('/');
+    return normalize(id, opt_relativeTo);
+  }
+
+  /**
+   * Resolves `id` to its parent directory pathname.
+   *
+   * @param {!string} id A canonical (that is, top-level or absolute) module
+   *     identifier.
+   *
+   * @return {!string} The parent directory pathname of `id`.
+   *
+   * @private
+   */
+  function dirname(id) {
+    if (!id) {
+      return;
+    }
+    
+    return (aliases[id] || id).split('/').slice(0, -1).join('/');
+  }
+
+  /**
+   * Resolves `id`, removing redundant path delimiters (`'/'`), current
+   * directory indirections (`'.'`), and parent directory indirections (`'..'`)
+   * along with their corresponding directory names to produce a fully
+   * qualified identifier suitable for use in a URL.
+   *
+   * @param {!string} id The AMD module ID to interpolate.
+   * @param {string=} opt_relativeTo The pathname from which a relative module
+   *     ID (that is, whose first term is `'.'` or `'..'`) should be resolved.
+   *
+   * @return {!string} A fully qualified pathname suitable for use in a URL.
+   *
+   * @private
+   */
+  function fqid(id, opt_relativeTo) {
+    var match = ABSOLUTE_PATH_RE.exec(id);
+    var protocol = match ? match[1] : '';
+  
+    if (match) {
+      return protocol + normalizeTerms(match[2].split('/')).join('/');
+    }
+
+    if (RELATIVE_PATH_RE.test(id)) {
+      if (!ABSOLUTE_PATH_RE.test(opt_relativeTo)) {
+        opt_relativeTo = (wd + '/' + baseUrl) + '/' + (opt_relativeTo || '');
       }
+    } else {
+      opt_relativeTo = (wd + '/' + baseUrl);
     }
 
-    result = protocol + normalizeTerms(terms).join('/');
+    match = ABSOLUTE_PATH_RE.exec(opt_relativeTo);
+    protocol = match ? match[1] : '';
+    baseline = match ? match[2] : '';
+    
+    return protocol +
+      normalizeTerms((baseline + '/' + id).split('/')).join('/');
+  }
 
-    if (result !== id) {
-      reverseMap[result] = id;
+  /**
+   * Resolves `id`, removing redundant path delimiters (`'/'`), current
+   * directory indirections (`'.'`), and parent directory indirections (`'..'`)
+   * along with their corresponding directory names to produce a canonical
+   * identifier.
+   *
+   * @param {!string} id The AMD module ID to interpolate.
+   * @param {string=} opt_relativeTo The pathname from which a relative module
+   *     ID (that is, whose first term is `'.'` or `'..'`) should be resolved.
+   *
+   * @return {!string} A canonical (that is, top-level or absolute) module
+   *     identifier.
+   *
+   * @private
+   */
+  function normalize(id, opt_relativeTo) {
+    var match = ABSOLUTE_PATH_RE.exec(wd + '/' + baseUrl);
+    var protocol = match ? match[1] : '';
+    var baseline = protocol + normalizeTerms(match[2].split('/')).join('/');
+    var p = fqid(id, opt_relativeTo); 
+
+    if (p.indexOf(baseline) === 0) {
+      return p.substr(baseline.length + 1);
     }
-
-    return result;
+    
+    return p;
   }
 
   /**
@@ -860,10 +939,12 @@
    * `['foo', 'bar', 'baz', 'asdf']`.
    *
    * @param {Array.<string>} terms A list of identifiers and path indirections
-   *     ('.' or '..').
+   *     (`'.'` or `'..'`).
    *
    * @return {Array.<string>} The remaining identifiers after interoplating any
-   *     '.' or '..' indirections and removing any empty terms.
+   *     `'.'` or `'..'` indirections and removing any empty terms.
+   *
+   * @private
    */
   function normalizeTerms(terms) {
     var normalized = [];
@@ -947,7 +1028,7 @@
       fn.apply(context, SPLICE.call(arguments, 0));
     };
   }
-  
+
   publish(require, define);
 })();
 
