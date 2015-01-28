@@ -897,10 +897,9 @@
 
     match = ABSOLUTE_PATH_RE.exec(opt_relativeTo);
     protocol = match ? match[1] : '';
-    baseline = match ? match[2] : '';
     
     return protocol +
-      normalizeTerms((baseline + '/' + id).split('/')).join('/');
+      normalizeTerms((match[2] + '/' + id).split('/')).join('/');
   }
 
   /**

@@ -80,7 +80,8 @@
   };
 
   /**
-   * Exports the AMD require function to the calling module’s scope and .
+   * Exports the AMD require function to the calling module’s scope and adds
+   * the AMD define function to the global scope.
    *
    * @param {!Function} require The AMD module loading function to export.
    * @param {!Function} define The AMD module defining function to export.
